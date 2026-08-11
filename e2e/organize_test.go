@@ -69,9 +69,9 @@ func TestOrganizePastaVaziaAvisaAntesDeCalibrar(t *testing.T) {
 	// do arquivo) pode ter aparecido em algum momento da execução até aqui.
 	screen := sess.Screen()
 	for _, naoEsperado := range []string{
-		"Passo 2 de 7",
-		"Passo 4 de 7",
-		"Passo 5 de 7",
+		"Passo 2 de 8",
+		"Passo 4 de 8",
+		"Passo 5 de 8",
 		"Adicionar um nível de pasta",
 		"Renomear os arquivos com base no conteúdo",
 	} {

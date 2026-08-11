@@ -164,10 +164,12 @@ func TestExpectedFlagsExist(t *testing.T) {
 		{"sample", ""},
 		{"ocr", ""},
 		{"ocr-lang", ""},
+		{"report", ""},
+		{"report-format", ""},
 	}
 
-	if len(cases) != 11 {
-		t.Fatalf("teste declara %d flags, esperava 11", len(cases))
+	if len(cases) != 13 {
+		t.Fatalf("teste declara %d flags, esperava 13", len(cases))
 	}
 
 	for _, c := range cases {
@@ -195,6 +197,12 @@ func TestDefaultOptions(t *testing.T) {
 	}
 	if opts.OCRLang != "por" {
 		t.Errorf("defaultOptions().OCRLang = %q, want %q", opts.OCRLang, "por")
+	}
+	if opts.ReportFormat != "csv" {
+		t.Errorf("defaultOptions().ReportFormat = %q, want %q", opts.ReportFormat, "csv")
+	}
+	if opts.Report != "" {
+		t.Errorf("defaultOptions().Report = %q, want vazio (relatório desligado por padrão)", opts.Report)
 	}
 }
 
@@ -522,5 +530,182 @@ func TestSampleOutsideInputMixedRelativeAndAbsolutePaths(t *testing.T) {
 	}
 	if outside {
 		t.Error("sampleOutsideInput() = true, want false (mesmo diretório, só que um dos lados é relativo)")
+	}
+}
+
+func TestNormalizeReportFormatValid(t *testing.T) {
+	for _, raw := range []string{"csv", "CSV", "  csv  ", "json", "JSON", ""} {
+		got, err := NormalizeReportFormat(raw)
+		if err != nil {
+			t.Fatalf("NormalizeReportFormat(%q) erro inesperado: %v", raw, err)
+		}
+		if got != "csv" && got != "json" {
+			t.Errorf("NormalizeReportFormat(%q) = %q, esperava \"csv\" ou \"json\"", raw, got)
+		}
+	}
+
+	got, err := NormalizeReportFormat("")
+	if err != nil || got != "csv" {
+		t.Errorf("NormalizeReportFormat(\"\") = (%q, %v), esperava (\"csv\", nil) — vazio deveria cair no default", got, err)
+	}
+}
+
+func TestNormalizeReportFormatInvalid(t *testing.T) {
+	_, err := NormalizeReportFormat("xml")
+	if err == nil {
+		t.Fatal("NormalizeReportFormat(\"xml\") deveria devolver erro")
+	}
+	for _, want := range []string{"csv", "json"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("erro %q deveria mencionar o formato válido %q", err.Error(), want)
+		}
+	}
+}
+
+// TestRunInvalidReportFormatErrorsBeforeProcessing prova a exigência
+// central de --report-format: um erro de digitação na flag precisa ser
+// detectado ANTES de qualquer arquivo ser tocado. Usa uma pasta de entrada
+// com um PDF de verdade (mesmo que mínimo) para que, se a validação
+// acontecesse tarde demais, o teste pegasse o arquivo sendo processado
+// mesmo assim.
+func TestRunInvalidReportFormatErrorsBeforeProcessing(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(inputDir, "doc.pdf"), []byte("conteudo qualquer"), 0o644); err != nil {
+		t.Fatalf("criar pdf de teste: %v", err)
+	}
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:     inputDir,
+		OutputDir:    outputDir,
+		OCR:          "never",
+		Report:       filepath.Join(t.TempDir(), "relatorio.csv"),
+		ReportFormat: "xml",
+	}
+
+	if _, err := tl.run(); err == nil {
+		t.Fatal("run() com --report-format inválido deveria devolver erro")
+	}
+
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		t.Fatalf("ler outputDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("outputDir tem %d entradas; --report-format inválido deveria falhar ANTES de processar qualquer arquivo", len(entries))
+	}
+}
+
+// TestRunGeneratesReportOnDryRun prova a exigência explícita: o relatório é
+// gerado mesmo em simulação, já que é justamente aí que ele mais serve
+// (conferir a classificação antes de aplicar de verdade).
+func TestRunGeneratesReportOnDryRun(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(inputDir, "doc.pdf"), []byte("conteudo qualquer"), 0o644); err != nil {
+		t.Fatalf("criar pdf de teste: %v", err)
+	}
+
+	reportPath := filepath.Join(t.TempDir(), "relatorio.csv")
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:        inputDir,
+		OutputDir:       outputDir,
+		UnclassifiedDir: "sem-classificacao",
+		OCR:             "never",
+		DryRun:          true,
+		Report:          reportPath,
+		ReportFormat:    "csv",
+	}
+
+	result, err := tl.run()
+	if err != nil {
+		t.Fatalf("run() erro inesperado: %v", err)
+	}
+
+	if _, statErr := os.Stat(reportPath); statErr != nil {
+		t.Fatalf("relatório não foi criado em DryRun: %v", statErr)
+	}
+
+	found := false
+	for _, d := range result.Details {
+		if strings.Contains(d, "relatório gravado em") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Result.Details não confirma o caminho do relatório gerado: %+v", result.Details)
+	}
+
+	// Em DryRun, nada é copiado/movido: o outputDir deve continuar vazio
+	// fora do arquivo de relatório, que fica em outro diretório.
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		t.Fatalf("ler outputDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("outputDir tem %d entradas após DryRun, esperava 0", len(entries))
+	}
+}
+
+// TestRunReportWriteFailureDoesNotFailOperation prova a regra explícita:
+// falha ao gravar o relatório (aqui, path aponta para um diretório já
+// existente, então os.Create falha) não faz run() devolver erro — a
+// organização já aconteceu e não pode ser desfeita por causa de um
+// artefato acessório. O aviso deve aparecer em Result.Details.
+func TestRunReportWriteFailureDoesNotFailOperation(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(inputDir, "doc.pdf"), []byte("conteudo qualquer"), 0o644); err != nil {
+		t.Fatalf("criar pdf de teste: %v", err)
+	}
+
+	// reportPath é um DIRETÓRIO existente, não um arquivo: os.Create deve
+	// falhar.
+	reportPath := t.TempDir()
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:        inputDir,
+		OutputDir:       outputDir,
+		UnclassifiedDir: "sem-classificacao",
+		OCR:             "never",
+		Report:          reportPath,
+		ReportFormat:    "csv",
+	}
+
+	result, err := tl.run()
+	if err != nil {
+		t.Fatalf("run() não deveria devolver erro por falha ao gravar o relatório, obteve: %v", err)
+	}
+
+	found := false
+	for _, d := range result.Details {
+		if strings.Contains(d, "não foi possível gravar o relatório") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Result.Details deveria conter um aviso sobre a falha ao gravar o relatório: %+v", result.Details)
+	}
+
+	// A organização em si deve ter acontecido normalmente: o arquivo saiu
+	// de inputDir (Move não foi pedido, então ele continua lá, mas uma
+	// cópia deve existir em outputDir/sem-classificacao, já que "conteudo
+	// qualquer" não é um PDF de verdade e não vai casar com nada).
+	unclassifiedEntries, err := os.ReadDir(filepath.Join(outputDir, "sem-classificacao"))
+	if err != nil {
+		t.Fatalf("ler outputDir/sem-classificacao: %v", err)
+	}
+	if len(unclassifiedEntries) != 1 {
+		t.Fatalf("esperava 1 arquivo em sem-classificacao, obteve %d — a organização deveria ter acontecido normalmente apesar da falha do relatório", len(unclassifiedEntries))
 	}
 }

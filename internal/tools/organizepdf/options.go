@@ -62,6 +62,16 @@ type Options struct {
 	// OCRLang é o idioma usado pelo motor de OCR (ex: "por", "eng"). Vazio
 	// é tratado como "por" na hora da execução.
 	OCRLang string `yaml:"ocr_lang"`
+	// Report é o caminho do arquivo de relatório desta execução (uma linha
+	// por arquivo considerado, classificado ou não, com o motivo quando não
+	// classificado). Vazio (default) significa que nenhum relatório é
+	// gerado. Ao contrário de DryRun/Sample, É persistido no perfil salvo:
+	// é razoável querer sempre gerar o relatório no mesmo caminho toda vez
+	// que um perfil é aplicado.
+	Report string `yaml:"report"`
+	// ReportFormat é o formato do relatório: "csv" (default) ou "json". Só
+	// tem efeito quando Report não é vazio.
+	ReportFormat string `yaml:"report_format"`
 }
 
 // defaultOptions devolve as Options padrão de organize-pdf: sem níveis
@@ -74,7 +84,33 @@ func defaultOptions() Options {
 		UnclassifiedDir: "sem-classificacao",
 		OCR:             "auto",
 		OCRLang:         "por",
+		ReportFormat:    "csv",
 	}
+}
+
+// validReportFormats lista os formatos aceitos por --report-format, na
+// ordem usada para compor a mensagem de erro.
+var validReportFormats = []string{"csv", "json"}
+
+// NormalizeReportFormat valida e normaliza o valor de --report-format,
+// aceitando (case-insensitive, com espaços nas pontas) "csv" ou "json";
+// vazio é tratado como "csv". Função pura, chamada por runWith ANTES de
+// qualquer processamento de arquivo: um erro de digitação na flag só vale a
+// pena descobrir antes de mover ou copiar um lote inteiro, nunca depois.
+func NormalizeReportFormat(raw string) (string, error) {
+	f := strings.ToLower(strings.TrimSpace(raw))
+	if f == "" {
+		f = "csv"
+	}
+	for _, valid := range validReportFormats {
+		if f == valid {
+			return f, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"formato de relatório inválido %q: use %s",
+		raw, strings.Join(validReportFormats, " ou "),
+	)
 }
 
 // ParseLevelFlags converte a entrada crua da flag repetível --level, no

@@ -35,9 +35,9 @@ const (
 // totalConfigSteps é a quantidade de etapas principais exibidas via
 // ui.Step() durante o fluxo interativo de organize-pdf: pasta de origem,
 // pasta de destino, modo de OCR, calibração dos níveis, nome do arquivo,
-// copiar/mover e teste de calibragem. Puramente de apresentação — não afeta
-// a lógica de configuração nem de processamento.
-const totalConfigSteps = 7
+// copiar/mover, relatório da execução e teste de calibragem. Puramente de
+// apresentação — não afeta a lógica de configuração nem de processamento.
+const totalConfigSteps = 8
 
 // screen é a tela interativa da ferramenta organize-pdf.
 type screen struct {
@@ -189,6 +189,11 @@ func (t *Tool) configure() (sampleText string, err error) {
 	ui.Blank()
 
 	if err := t.configureCopyOrMove(); err != nil {
+		return "", err
+	}
+	ui.Blank()
+
+	if err := t.configureReport(); err != nil {
 		return "", err
 	}
 	ui.Blank()
@@ -508,6 +513,42 @@ func (t *Tool) configureCopyOrMove() error {
 	return nil
 }
 
+// configureReport pergunta se deseja gerar um relatório desta execução
+// (uma linha por arquivo considerado, classificado ou não, com o motivo) e,
+// em caso afirmativo, o caminho onde gravá-lo. Default "sim": em contexto
+// fiscal — o caso motivador desta ferramenta — poder conferir depois por
+// que cada arquivo foi parar onde foi vale mais do que economizar uma
+// pergunta. O formato (--report-format) não é perguntado aqui: fica no
+// default "csv", ajustável via flag para quem for processar o relatório
+// por programa.
+func (t *Tool) configureReport() error {
+	ui.Step(7, totalConfigSteps, "Relatório da execução")
+
+	generate := true
+	if err := survey.AskOne(&survey.Confirm{
+		Message: "Gerar um relatório desta execução (arquivo, destino, classificado ou não, e o motivo)?",
+		Default: true,
+	}, &generate); err != nil {
+		return err
+	}
+
+	if !generate {
+		t.opts.Report = ""
+		return nil
+	}
+
+	path := "./relatorio-organizacao.csv"
+	if err := survey.AskOne(&survey.Input{
+		Message: "Caminho do arquivo de relatório:",
+		Default: path,
+	}, &path); err != nil {
+		return err
+	}
+
+	t.opts.Report = strings.TrimSpace(path)
+	return nil
+}
+
 // testAndApplyCycle conduz o coração da usabilidade de organize-pdf: antes
 // de qualquer alteração real, testa a calibração atual em modo simulação
 // (contra todos os arquivos ou uma amostra), mostra o resultado e deixa o
@@ -518,7 +559,7 @@ func (s *screen) testAndApplyCycle(nav *ui.Navigator, sampleText string) error {
 	t := s.tool
 
 	for cycle := 0; cycle < maxCalibrationCycles; cycle++ {
-		ui.Step(7, totalConfigSteps, "Teste de calibragem")
+		ui.Step(8, totalConfigSteps, "Teste de calibragem")
 
 		sample, err := askTestSampleSize()
 		if err != nil {

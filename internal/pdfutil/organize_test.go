@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"testing"
 )
@@ -644,5 +645,242 @@ func TestOrganizeOCRAlwaysPropagatesFakeEngineTextToClassification(t *testing.T)
 	destAbs := filepath.Join(outputDir, wantDest)
 	if _, err := os.Stat(destAbs); err != nil {
 		t.Fatalf("arquivo de destino não foi criado em %q: %v", destAbs, err)
+	}
+}
+
+// duplicateBatchOptions monta as OrganizeOptions usadas pelos testes de
+// colisão de destino abaixo: dois arquivos com o MESMO conteúdo (mesmo
+// fornecedor, mesmo número de nota — nota fiscal reenviada ou duplicada na
+// pasta de entrada, o cenário relatado) resolvem para o MESMO destino.
+// "a-original.pdf" vem antes de "b-duplicada.pdf" em ordem alfabética, e
+// Organize processa os arquivos nessa ordem — então "a-original.pdf" é
+// sempre quem "ganha" o destino, e "b-duplicada.pdf" é sempre quem colide.
+func duplicateBatchOptions(inputDir, outputDir string, dryRun, overwrite bool) OrganizeOptions {
+	return OrganizeOptions{
+		InputDir:  inputDir,
+		OutputDir: outputDir,
+		Levels: []Level{
+			{Label: "empresa", Regex: regexp.MustCompile(`Empresa: (\w+)`)},
+		},
+		FilenameRegex: regexp.MustCompile(`NF:\s*(\d+)`),
+		Copy:          true,
+		DryRun:        dryRun,
+		Overwrite:     overwrite,
+	}
+}
+
+func writeDuplicateBatch(t *testing.T, inputDir string) {
+	t.Helper()
+	content := "Empresa: Acme\nNF: 00123"
+	if err := os.WriteFile(filepath.Join(inputDir, "a-original.pdf"), buildTestPDF(t, []string{content}), 0o644); err != nil {
+		t.Fatalf("criar a-original.pdf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(inputDir, "b-duplicada.pdf"), buildTestPDF(t, []string{content}), 0o644); err != nil {
+		t.Fatalf("criar b-duplicada.pdf: %v", err)
+	}
+}
+
+// TestOrganizeSameBatchCollisionDryRunReclassifiesSecondFile prova a
+// exigência 1 do defeito relatado: em SIMULAÇÃO, dois arquivos do mesmo
+// lote que resolvem para o mesmo destino não podem ambos aparecer como
+// classificados — antes desta correção, a simulação nunca via essa
+// colisão, porque nada é gravado em disco e o único ponto que detectava
+// colisão era um os.Stat rodado só em execução real.
+func TestOrganizeSameBatchCollisionDryRunReclassifiesSecondFile(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	writeDuplicateBatch(t, inputDir)
+
+	result, err := Organize(context.Background(), duplicateBatchOptions(inputDir, outputDir, true, false))
+	if err != nil {
+		t.Fatalf("Organize (dry-run): %v", err)
+	}
+
+	if len(result.Organized) != 1 {
+		t.Fatalf("Organized tem %d entradas, esperava 1: %+v", len(result.Organized), result.Organized)
+	}
+	if filepath.Base(result.Organized[0].Source) != "a-original.pdf" {
+		t.Errorf("Organized[0].Source = %q, esperava a-original.pdf", result.Organized[0].Source)
+	}
+
+	if len(result.Unclassified) != 1 {
+		t.Fatalf("Unclassified tem %d entradas, esperava 1: %+v", len(result.Unclassified), result.Unclassified)
+	}
+	u := result.Unclassified[0]
+	if filepath.Base(u.Source) != "b-duplicada.pdf" {
+		t.Errorf("Unclassified[0].Source = %q, esperava b-duplicada.pdf", u.Source)
+	}
+	if u.Unmatched == nil || u.Unmatched.Level != "destino" {
+		t.Fatalf("Unclassified[0].Unmatched = %+v, esperava Level \"destino\"", u.Unmatched)
+	}
+}
+
+// TestOrganizeSameBatchCollisionRealRunReclassifiesSecondFile é o espelho
+// do teste acima em execução real: a mesma colisão precisa ser detectada
+// pela mesma checagem explícita (destinationClaimed), não mais só "por
+// acaso" pelo os.Stat rodado depois de o primeiro arquivo já ter sido
+// gravado.
+func TestOrganizeSameBatchCollisionRealRunReclassifiesSecondFile(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	writeDuplicateBatch(t, inputDir)
+
+	result, err := Organize(context.Background(), duplicateBatchOptions(inputDir, outputDir, false, false))
+	if err != nil {
+		t.Fatalf("Organize (real): %v", err)
+	}
+
+	if len(result.Organized) != 1 {
+		t.Fatalf("Organized tem %d entradas, esperava 1: %+v", len(result.Organized), result.Organized)
+	}
+	if filepath.Base(result.Organized[0].Source) != "a-original.pdf" {
+		t.Errorf("Organized[0].Source = %q, esperava a-original.pdf", result.Organized[0].Source)
+	}
+
+	if len(result.Unclassified) != 1 {
+		t.Fatalf("Unclassified tem %d entradas, esperava 1: %+v", len(result.Unclassified), result.Unclassified)
+	}
+	u := result.Unclassified[0]
+	if filepath.Base(u.Source) != "b-duplicada.pdf" {
+		t.Errorf("Unclassified[0].Source = %q, esperava b-duplicada.pdf", u.Source)
+	}
+	if u.Unmatched == nil || u.Unmatched.Level != "destino" {
+		t.Fatalf("Unclassified[0].Unmatched = %+v, esperava Level \"destino\"", u.Unmatched)
+	}
+
+	// A colisão em batch não deve impedir a organização real de escrever o
+	// arquivo que de fato ganhou o destino.
+	destAbs := filepath.Join(outputDir, "Acme", "00123.pdf")
+	if _, err := os.Stat(destAbs); err != nil {
+		t.Fatalf("arquivo vencedor da colisão não foi gravado em %q: %v", destAbs, err)
+	}
+	// E o arquivo reclassificado deve ter sido gravado em
+	// sem-classificacao, não perdido.
+	unclassifiedAbs := filepath.Join(outputDir, "sem-classificacao", "b-duplicada.pdf")
+	if _, err := os.Stat(unclassifiedAbs); err != nil {
+		t.Fatalf("arquivo reclassificado por colisão não foi gravado em %q: %v", unclassifiedAbs, err)
+	}
+}
+
+// TestOrganizeDryRunMatchesRealRunOnSameBatchCollision é o critério de
+// aceitação central do defeito relatado: rodar com --dry-run e sem, sobre a
+// MESMA pasta de entrada e o MESMO --output, precisa produzir o mesmo
+// Organized/Unclassified — comparados campo a campo (Source, Dest,
+// Unmatched), não só em contagem. Um relatório de simulação que discorda
+// da execução real destrói o valor central da feature de relatório.
+//
+// As duas chamadas usam o MESMO outputDir, na ordem dry-run → real: como
+// dry-run nunca grava nada, outputDir chega intacto na chamada real, e as
+// duas produzem exatamente os mesmos caminhos absolutos de destino — o que
+// permite comparar até o texto de Unmatched.Pattern (que embute o caminho
+// de destino), não só Unmatched.Level.
+func TestOrganizeDryRunMatchesRealRunOnSameBatchCollision(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	writeDuplicateBatch(t, inputDir)
+
+	dryResult, err := Organize(context.Background(), duplicateBatchOptions(inputDir, outputDir, true, false))
+	if err != nil {
+		t.Fatalf("Organize (dry-run): %v", err)
+	}
+
+	realResult, err := Organize(context.Background(), duplicateBatchOptions(inputDir, outputDir, false, false))
+	if err != nil {
+		t.Fatalf("Organize (real): %v", err)
+	}
+
+	if !reflect.DeepEqual(dryResult.Organized, realResult.Organized) {
+		t.Errorf("Organized diverge entre dry-run e execução real.\ndry-run: %+v\nreal:    %+v", dryResult.Organized, realResult.Organized)
+	}
+	if !reflect.DeepEqual(dryResult.Unclassified, realResult.Unclassified) {
+		t.Errorf("Unclassified diverge entre dry-run e execução real.\ndry-run: %+v\nreal:    %+v", dryResult.Unclassified, realResult.Unclassified)
+	}
+
+	// O relatório (internal/pdfutil/report.go) é função pura do
+	// OrganizeResult — mas confirma explicitamente, como pedido, que as
+	// linhas geradas nos dois modos também batem.
+	dryReport := BuildReport(dryResult)
+	realReport := BuildReport(realResult)
+	if !reflect.DeepEqual(dryReport, realReport) {
+		t.Errorf("relatório diverge entre dry-run e execução real.\ndry-run: %+v\nreal:    %+v", dryReport, realReport)
+	}
+}
+
+// TestOrganizeDryRunDetectsPreexistingDestinationCollision prova a
+// exigência 2 do defeito relatado: em SIMULAÇÃO, um destino que já existe
+// em disco (sobrevivente de uma execução anterior, não deste lote) precisa
+// ser detectado como colisão via os.Stat, exatamente como já acontecia na
+// execução real — sem essa checagem, a simulação prometia sobrescrever
+// silenciosamente um arquivo que a execução real teria pulado.
+func TestOrganizeDryRunDetectsPreexistingDestinationCollision(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	content := "Empresa: Acme\nNF: 00123"
+	if err := os.WriteFile(filepath.Join(inputDir, "nota.pdf"), buildTestPDF(t, []string{content}), 0o644); err != nil {
+		t.Fatalf("criar nota.pdf: %v", err)
+	}
+
+	// Simula uma execução anterior: o destino já existe em disco.
+	preexistingDir := filepath.Join(outputDir, "Acme")
+	if err := os.MkdirAll(preexistingDir, 0o755); err != nil {
+		t.Fatalf("criar %s: %v", preexistingDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(preexistingDir, "00123.pdf"), []byte("já estava aqui"), 0o644); err != nil {
+		t.Fatalf("criar destino pré-existente: %v", err)
+	}
+
+	result, err := Organize(context.Background(), duplicateBatchOptions(inputDir, outputDir, true, false))
+	if err != nil {
+		t.Fatalf("Organize (dry-run): %v", err)
+	}
+
+	if len(result.Organized) != 0 {
+		t.Fatalf("Organized tem %d entradas, esperava 0 (destino já existe em disco): %+v", len(result.Organized), result.Organized)
+	}
+	if len(result.Unclassified) != 1 {
+		t.Fatalf("Unclassified tem %d entradas, esperava 1: %+v", len(result.Unclassified), result.Unclassified)
+	}
+	u := result.Unclassified[0]
+	if u.Unmatched == nil || u.Unmatched.Level != "destino" {
+		t.Fatalf("Unclassified[0].Unmatched = %+v, esperava Level \"destino\"", u.Unmatched)
+	}
+}
+
+// TestOrganizeDryRunOverwriteIgnoresPreexistingDestinationCollision é o
+// contraponto do teste acima: com --overwrite ligado, um destino já
+// existente em disco NÃO é tratado como colisão — nem em simulação, nem em
+// execução real —, porque a intenção de sobrescrever já é explícita.
+func TestOrganizeDryRunOverwriteIgnoresPreexistingDestinationCollision(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	content := "Empresa: Acme\nNF: 00123"
+	if err := os.WriteFile(filepath.Join(inputDir, "nota.pdf"), buildTestPDF(t, []string{content}), 0o644); err != nil {
+		t.Fatalf("criar nota.pdf: %v", err)
+	}
+
+	preexistingDir := filepath.Join(outputDir, "Acme")
+	if err := os.MkdirAll(preexistingDir, 0o755); err != nil {
+		t.Fatalf("criar %s: %v", preexistingDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(preexistingDir, "00123.pdf"), []byte("já estava aqui"), 0o644); err != nil {
+		t.Fatalf("criar destino pré-existente: %v", err)
+	}
+
+	result, err := Organize(context.Background(), duplicateBatchOptions(inputDir, outputDir, true, true))
+	if err != nil {
+		t.Fatalf("Organize (dry-run, overwrite): %v", err)
+	}
+
+	if len(result.Unclassified) != 0 {
+		t.Fatalf("Unclassified tem %d entradas, esperava 0 (--overwrite deveria ignorar o destino pré-existente): %+v", len(result.Unclassified), result.Unclassified)
+	}
+	if len(result.Organized) != 1 {
+		t.Fatalf("Organized tem %d entradas, esperava 1: %+v", len(result.Organized), result.Organized)
+	}
+	wantDest := filepath.Join("Acme", "00123.pdf")
+	if result.Organized[0].Dest != wantDest {
+		t.Errorf("Organized[0].Dest = %q, esperava %q", result.Organized[0].Dest, wantDest)
 	}
 }
