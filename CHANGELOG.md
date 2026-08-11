@@ -18,6 +18,14 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.5.0] - 2026-08-11
+
+### Adicionado
+
+- **Desfazer uma organização (`organize-pdf`).** `organize-pdf` copia por padrão, mas com `--move` a operação era irreversível — quem roda um lote grande com uma regex recém-calibrada erra pelo menos uma vez, e até aqui esse erro custava reorganizar tudo à mão. Toda execução real (nunca uma simulação com `--dry-run`) agora grava um manifesto do que foi copiado ou movido, incluindo os arquivos que caíram em `--unclassified-dir`. Novo comando `file-manager undo [--id <id>] [--last] [--dry-run] [-y|--yes] [--list] [--force]`: desfazer uma cópia apaga o que foi criado no destino (o original nunca é tocado); desfazer um movimento devolve os arquivos à origem. Sem `--id` nem `--last`, em terminal interativo pergunta qual operação desfazer; sem terminal, falha com mensagem clara. O menu principal ganhou a opção "Desfazer uma organização", que só aparece depois de pelo menos uma operação real registrada.
+- **As regras de segurança são o núcleo da feature.** Nada fora do manifesto é tocado; um arquivo cujo tamanho mudou desde a organização original é pulado e reportado, nunca apagado (pode ter sido editado depois — a verificação é por tamanho, não por conteúdo, por custo num lote grande); uma origem já ocupada não é sobrescrita ao devolver um arquivo movido; e só diretórios de fato vazios são removidos no destino, nunca de forma recursiva. Um manifesto já desfeito recusa ser desfeito de novo sem `--force`.
+- Novo pacote `internal/history`: grava e lê o manifesto (`Save`, `Load`, `List`, `MarkUndone`) e implementa a lógica de desfazer (`Undo`). A gravação é injetada em `pdfutil.OrganizeOptions.Recorder`, para que `internal/pdfutil` continue sem depender de configuração do usuário — só quem chama `Organize` (o comando `organize-pdf`) conhece os dois domínios. Simulação (`--dry-run`) nunca gera manifesto: nada foi alterado, não há o que desfazer. Falha ao gravar o manifesto nunca falha a operação de organizar, que já aconteceu — vira um aviso no resultado.
+
 ## [0.4.0] - 2026-08-11
 
 ### Adicionado

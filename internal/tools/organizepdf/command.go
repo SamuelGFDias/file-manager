@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/SamuelGFDias/file-manager/internal/history"
 	"github.com/SamuelGFDias/file-manager/internal/ocr"
 	"github.com/SamuelGFDias/file-manager/internal/pdfutil"
 	"github.com/SamuelGFDias/file-manager/internal/tool"
@@ -257,6 +259,41 @@ func (t *Tool) Command() *cobra.Command {
 	return cmd
 }
 
+// historyRecorder monta a função injetada em pdfutil.OrganizeOptions.
+// Recorder: converte as RecordedEntry de uma execução real em
+// history.Entry e grava um history.Manifest com history.Save. Fica aqui —
+// no comando, não em pdfutil — de propósito: é o único ponto do CLI que
+// conhece tanto pdfutil (o domínio de organização) quanto internal/history
+// (o domínio de histórico/desfazer); nenhum dos dois pacotes de domínio
+// precisa conhecer o outro. inputDir e outputDir devem ser caminhos
+// absolutos: o comando "undo" pode rodar depois, de um diretório de
+// trabalho diferente do usado nesta organização, então o manifesto precisa
+// fazer sentido independente do cwd de quem o gravou.
+func historyRecorder(inputDir, outputDir string) func(action string, entries []pdfutil.RecordedEntry) error {
+	return func(action string, entries []pdfutil.RecordedEntry) error {
+		histEntries := make([]history.Entry, 0, len(entries))
+		for _, e := range entries {
+			histEntries = append(histEntries, history.Entry{
+				Source: e.Source,
+				Dest:   e.Dest,
+				Size:   e.Size,
+			})
+		}
+
+		m := history.Manifest{
+			Tool:      "organize-pdf",
+			CreatedAt: time.Now(),
+			InputDir:  inputDir,
+			OutputDir: outputDir,
+			Action:    history.Action(action),
+			Entries:   histEntries,
+		}
+
+		_, err := history.Save(m)
+		return err
+	}
+}
+
 // runWith organiza os PDFs de t.opts.InputDir em t.opts.OutputDir, com os
 // overrides de dryRun e sample informados (usados pelo fluxo interativo
 // para testar a calibração antes de aplicar de verdade). run() é apenas
@@ -302,6 +339,18 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 		return tool.Result{}, err
 	}
 
+	// InputDir/OutputDir absolutos: o manifesto de histórico precisa fazer
+	// sentido mesmo que "file-manager undo" rode depois, de um diretório
+	// de trabalho diferente do usado nesta organização.
+	inputAbs, absErr := filepath.Abs(t.opts.InputDir)
+	if absErr != nil {
+		inputAbs = t.opts.InputDir
+	}
+	outputAbs, absErr := filepath.Abs(t.opts.OutputDir)
+	if absErr != nil {
+		outputAbs = t.opts.OutputDir
+	}
+
 	organizeOpts := pdfutil.OrganizeOptions{
 		InputDir:        t.opts.InputDir,
 		OutputDir:       t.opts.OutputDir,
@@ -313,6 +362,7 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 		Sample:          sample,
 		Overwrite:       t.opts.Overwrite,
 		Text:            textOpts,
+		Recorder:        historyRecorder(inputAbs, outputAbs),
 	}
 
 	result, err := pdfutil.Organize(context.Background(), organizeOpts)
@@ -327,6 +377,7 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 
 	details := make([]string, 0, maxUnclassifiedDetails+1)
 	details = append(details, ocrWarnings(textOpts)...)
+	details = append(details, result.Warnings...)
 	for i, entry := range result.Unclassified {
 		if i >= maxUnclassifiedDetails {
 			details = append(details, fmt.Sprintf("... e mais %d", len(result.Unclassified)-maxUnclassifiedDetails))

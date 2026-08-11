@@ -124,6 +124,43 @@ file-manager organize-pdf -i ./invoices -o ./invoices_organized \
 
 Com zero `--level`, a ferramenta funciona como um renomeador em lote dos PDFs.
 
+## Desfazer uma organização
+
+`organize-pdf` copia por padrão (não destrutivo), mas `--move` move de verdade — e quem roda um lote grande com uma regex recém-calibrada erra pelo menos uma vez. A partir desta versão, toda execução real (nunca uma simulação com `--dry-run`) grava um manifesto do que foi copiado ou movido, e `file-manager undo` reverte a partir dele.
+
+**Só funciona para operações feitas a partir desta versão** — o manifesto não existia antes, então não há nada para o `undo` reverter de uma organização feita com uma versão anterior do `file-manager`.
+
+```bash
+file-manager undo --list              # lista as operações registradas
+file-manager undo --last --dry-run    # mostra o que a última operação desfaria, sem tocar em nada
+file-manager undo --last -y           # desfaz a última operação, sem pedir confirmação
+file-manager undo --id 20260811-164530 -y   # desfaz uma operação específica
+```
+
+Sem `--id` nem `--last`, em terminal interativo o comando pergunta qual operação desfazer; sem terminal (ex: dentro de um script), falha com uma mensagem clara pedindo `--id` ou `--last`. Sem `-y`/`--yes`, pede confirmação mostrando quantos arquivos serão afetados. O mesmo fluxo também está disponível no menu principal, na opção "Desfazer uma organização" — que só aparece depois que pelo menos uma operação real foi registrada.
+
+**Desfazer uma cópia é diferente de desfazer um movimento:**
+
+- **Cópia** (`--move` não usado): desfazer **apaga** os arquivos criados no destino. O original em `--input` nunca é tocado — ele nunca tinha saído de lá.
+- **Movimento** (`--move`): desfazer **devolve** os arquivos ao caminho de origem original.
+
+**Regras de segurança, aplicadas sempre:**
+
+- Nenhum arquivo fora do que foi registrado no manifesto é tocado.
+- Antes de apagar ou mover um arquivo de volta, o `undo` verifica se ele ainda existe no destino e se o **tamanho** bate com o registrado na hora da organização. Tamanho diferente = o arquivo pode ter sido substituído ou editado depois → a entrada é **pulada**, nunca apagada. (A verificação é por tamanho, não por conteúdo — comparar o conteúdo inteiro de cada arquivo custaria caro demais num lote com centenas de PDFs.)
+- Ao devolver um arquivo à origem, se já existir algo lá, a entrada é pulada — nunca sobrescreve.
+- Diretórios que ficaram vazios no destino, depois do desfazer, são removidos; um diretório com qualquer outro arquivo dentro é preservado (nunca há remoção recursiva).
+- Uma operação já desfeita não pode ser desfeita de novo sem `--force`.
+
+| Flag | Descrição |
+|------|-----------|
+| `--id <id>` | ID da operação a desfazer |
+| `--last` | Desfaz a operação registrada mais recente |
+| `--dry-run` | Só mostra o que seria feito, sem tocar em nada |
+| `-y, --yes` | Desfaz sem pedir confirmação |
+| `--list` | Lista as operações registradas e sai |
+| `--force` | Permite desfazer uma operação que já foi desfeita antes |
+
 ## Atualização
 
 `file-manager update` consulta o último release publicado no GitHub, compara com a versão em execução e, se houver uma mais nova, pede confirmação antes de baixar e substituir o próprio executável.
@@ -223,9 +260,11 @@ internal/ui/               Screen, Navigator, Clear cross-platform
 internal/ui/filepicker/    Seleção interativa de arquivos/pastas
 internal/ui/calibrate/     Calibração interativa de regex
 internal/ui/profiles/      CRUD de perfis (genérico para todas as ferramentas)
+internal/ui/undo/          Tela interativa de desfazer uma organização
 internal/ui/docs/          Exportação de documentação
 internal/tool/             Contrato Tool/Param/Doc
 internal/config/           Gerenciamento de perfis YAML
+internal/history/          Manifesto de operações reversíveis + lógica de desfazer
 internal/pdfutil/          Núcleo: merge, split, organize, extração de texto
 internal/regexcalib/       Sugestão de regex por exemplo
 internal/tools/            Uma subpasta por ferramenta

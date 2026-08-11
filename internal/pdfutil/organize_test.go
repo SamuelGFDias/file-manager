@@ -301,6 +301,202 @@ func TestOrganizeZeroValueTextBehavesAsBefore(t *testing.T) {
 	}
 }
 
+// TestOrganizeRecorderCalledOnRealMoveWithAllEntries prova que Recorder
+// recebe TODAS as movimentações efetivas de uma execução real (--move),
+// incluindo o arquivo que caiu em sem-classificacao — ele também foi
+// movido, e precisa poder voltar.
+func TestOrganizeRecorderCalledOnRealMoveWithAllEntries(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	classified := filepath.Join(inputDir, "classificado.pdf")
+	if err := os.WriteFile(classified, buildTestPDF(t, []string{"Empresa: Acme"}), 0o644); err != nil {
+		t.Fatalf("escrever pdf classificado: %v", err)
+	}
+	unclassified := filepath.Join(inputDir, "sem-info.pdf")
+	if err := os.WriteFile(unclassified, []byte("nao e um pdf de verdade"), 0o644); err != nil {
+		t.Fatalf("escrever pdf não classificável: %v", err)
+	}
+
+	var gotAction string
+	var gotEntries []RecordedEntry
+
+	result, err := Organize(context.Background(), OrganizeOptions{
+		InputDir:  inputDir,
+		OutputDir: outputDir,
+		Levels: []Level{
+			{Label: "empresa", Regex: regexp.MustCompile(`Empresa: (\w+)`)},
+		},
+		Copy: false, // --move
+		Recorder: func(action string, entries []RecordedEntry) error {
+			gotAction = action
+			gotEntries = entries
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Organize: %v", err)
+	}
+
+	if gotAction != "move" {
+		t.Fatalf("Recorder recebeu action = %q, esperava %q", gotAction, "move")
+	}
+	if len(gotEntries) != 2 {
+		t.Fatalf("Recorder recebeu %d entradas, esperava 2 (1 classificada + 1 sem-classificacao); result=%+v", len(gotEntries), result)
+	}
+
+	for _, e := range gotEntries {
+		if !filepath.IsAbs(e.Source) {
+			t.Errorf("RecordedEntry.Source deveria ser absoluto, obteve %q", e.Source)
+		}
+		if !filepath.IsAbs(e.Dest) {
+			t.Errorf("RecordedEntry.Dest deveria ser absoluto, obteve %q", e.Dest)
+		}
+		if e.Size <= 0 {
+			t.Errorf("RecordedEntry.Size deveria ser > 0, obteve %d para %q", e.Size, e.Dest)
+		}
+		if _, statErr := os.Stat(e.Source); statErr == nil {
+			t.Errorf("RecordedEntry.Source (%q) não deveria mais existir após --move", e.Source)
+		}
+		if _, statErr := os.Stat(e.Dest); statErr != nil {
+			t.Errorf("RecordedEntry.Dest (%q) deveria existir: %v", e.Dest, statErr)
+		}
+	}
+}
+
+// TestOrganizeRecorderCalledOnRealCopy confirma que, com Copy: true, o
+// Recorder recebe action = "copy".
+func TestOrganizeRecorderCalledOnRealCopy(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(inputDir, "a.pdf"), buildTestPDF(t, []string{"Empresa: Acme"}), 0o644); err != nil {
+		t.Fatalf("escrever pdf: %v", err)
+	}
+
+	var gotAction string
+	_, err := Organize(context.Background(), OrganizeOptions{
+		InputDir:  inputDir,
+		OutputDir: outputDir,
+		Levels: []Level{
+			{Label: "empresa", Regex: regexp.MustCompile(`Empresa: (\w+)`)},
+		},
+		Copy: true,
+		Recorder: func(action string, entries []RecordedEntry) error {
+			gotAction = action
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Organize: %v", err)
+	}
+	if gotAction != "copy" {
+		t.Fatalf("Recorder recebeu action = %q, esperava %q", gotAction, "copy")
+	}
+}
+
+// TestOrganizeDryRunNeverCallsRecorder é a garantia central pedida: uma
+// simulação não altera nada, então não pode gerar histórico.
+func TestOrganizeDryRunNeverCallsRecorder(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(inputDir, "a.pdf"), buildTestPDF(t, []string{"Empresa: Acme"}), 0o644); err != nil {
+		t.Fatalf("escrever pdf: %v", err)
+	}
+
+	called := false
+	result, err := Organize(context.Background(), OrganizeOptions{
+		InputDir:  inputDir,
+		OutputDir: outputDir,
+		Levels: []Level{
+			{Label: "empresa", Regex: regexp.MustCompile(`Empresa: (\w+)`)},
+		},
+		DryRun: true,
+		Recorder: func(action string, entries []RecordedEntry) error {
+			called = true
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Organize: %v", err)
+	}
+	if called {
+		t.Fatal("Recorder não deveria ser chamado em DryRun")
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("esperava 0 avisos em DryRun, obteve %+v", result.Warnings)
+	}
+}
+
+// TestOrganizeRecorderNotCalledWhenNothingOrganized confirma que uma
+// execução real que não organiza nada (pasta de entrada vazia) também não
+// gera histórico, mesmo sem ser DryRun.
+func TestOrganizeRecorderNotCalledWhenNothingOrganized(t *testing.T) {
+	inputDir := t.TempDir() // vazio, de propósito
+	outputDir := t.TempDir()
+
+	called := false
+	result, err := Organize(context.Background(), OrganizeOptions{
+		InputDir:  inputDir,
+		OutputDir: outputDir,
+		Recorder: func(action string, entries []RecordedEntry) error {
+			called = true
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Organize: %v", err)
+	}
+	if called {
+		t.Fatal("Recorder não deveria ser chamado quando nada foi organizado")
+	}
+	if result.Total != 0 {
+		t.Fatalf("Total = %d, esperava 0", result.Total)
+	}
+}
+
+// TestOrganizeRecorderErrorBecomesWarningNotFailure prova a regra mais
+// importante da injeção: uma falha ao gravar o histórico não pode falhar a
+// operação de organizar, que já aconteceu de verdade.
+func TestOrganizeRecorderErrorBecomesWarningNotFailure(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(inputDir, "a.pdf"), buildTestPDF(t, []string{"Empresa: Acme"}), 0o644); err != nil {
+		t.Fatalf("escrever pdf: %v", err)
+	}
+
+	recorderErr := fmt.Errorf("disco cheio (erro simulado)")
+	result, err := Organize(context.Background(), OrganizeOptions{
+		InputDir:  inputDir,
+		OutputDir: outputDir,
+		Levels: []Level{
+			{Label: "empresa", Regex: regexp.MustCompile(`Empresa: (\w+)`)},
+		},
+		Copy: true,
+		Recorder: func(action string, entries []RecordedEntry) error {
+			return recorderErr
+		},
+	})
+	if err != nil {
+		t.Fatalf("Organize não deveria falhar por causa de um erro do Recorder, obteve: %v", err)
+	}
+	if len(result.Organized) != 1 {
+		t.Fatalf("a organização em si deveria ter acontecido normalmente, obteve %d organizados", len(result.Organized))
+	}
+	if len(result.Warnings) != 1 {
+		t.Fatalf("esperava exatamente 1 aviso sobre a falha do Recorder, obteve %+v", result.Warnings)
+	}
+
+	// O arquivo de destino precisa existir de verdade — a falha foi só no
+	// registro do histórico, não na operação de organizar.
+	destAbs := filepath.Join(outputDir, "Acme", "a.pdf")
+	if _, statErr := os.Stat(destAbs); statErr != nil {
+		t.Fatalf("arquivo de destino deveria existir apesar do erro do Recorder: %v", statErr)
+	}
+}
+
 // --- PDF de teste com imagem embutida ---------------------------------------
 //
 // O motor de OCR falso usado abaixo (fakeOCREngine) já existe neste pacote de
