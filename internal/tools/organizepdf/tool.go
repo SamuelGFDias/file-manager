@@ -68,7 +68,11 @@ func (t *Tool) Doc() tool.Doc {
 			"never: esses arquivos continuam sem texto e caem em --unclassified-dir.\n\n" +
 			"Um arquivo cujo texto não casa com algum nível (ou com --filename-regex) NUNCA é perdido nem " +
 			"interrompe o lote: ele é copiado/movido para a subpasta --unclassified-dir dentro de --output, " +
-			"e o motivo exato da falha (qual nível, ou o nome do arquivo) é reportado no resultado.",
+			"e o motivo exato da falha (qual nível, ou o nome do arquivo) é reportado no resultado.\n\n" +
+			"--report grava um relatório desta execução (uma linha por arquivo considerado, classificado ou " +
+			"não, com o motivo quando não classificado) em CSV (padrão) ou JSON (--report-format json); " +
+			"funciona também com --dry-run, que é justamente quando mais serve — permite conferir a " +
+			"classificação inteira numa planilha antes de tocar em qualquer arquivo de verdade.",
 		WhenToUse: []string{
 			"quando o usuário tiver uma pasta cheia de PDFs (ex: notas fiscais, contratos, boletos) e quiser organizá-los automaticamente em subpastas a partir de algo escrito no próprio documento",
 			"quando o usuário quiser renomear em lote vários PDFs pelo conteúdo (ex: pelo número da nota fiscal), sem necessariamente movê-los para subpastas",
@@ -101,6 +105,11 @@ func (t *Tool) Doc() tool.Doc {
 				Command: `file-manager organize-pdf --input ./notas-escaneadas --output ./organizado ` +
 					`--level "fornecedor=SUPPLIER:\s*(\w+)" --ocr always --ocr-lang eng`,
 			},
+			{
+				Title: "Simular a organização gerando um relatório em CSV para conferir a classificação numa planilha antes de aplicar",
+				Command: `file-manager organize-pdf --input ./notas --output ./organizado ` +
+					`--level "fornecedor=FORNECEDOR:\s*(\w+)" --dry-run --report ./relatorio-organizacao.csv`,
+			},
 		},
 		ProfileSchema: `input_dir: ./notas
 output_dir: ./organizado
@@ -114,14 +123,18 @@ move: false
 unclassified_dir: sem-classificacao
 overwrite: false
 ocr: auto
-ocr_lang: por`,
+ocr_lang: por
+report: ''
+report_format: csv`,
 		Notes: []string{
 			"PDFs digitalizados (imagem sem camada de texto) passam por OCR via Tesseract quando --ocr é \"auto\" (padrão, aplica OCR só nas páginas sem texto embutido) ou \"always\" (força OCR em todas as páginas, ignorando texto embutido); --ocr never desliga o OCR. Sem o Tesseract instalado no sistema, esses PDFs continuam sem texto para casar com qualquer regex e caem em --unclassified-dir, mesmo com --ocr auto ou always.",
 			"OCR é sensivelmente mais lento que a extração de texto embutido (da ordem de ~1s por página) e pode errar caracteres (ex: confundir \"0\" com \"O\"), então regex calibradas contra texto de OCR costumam se beneficiar de padrões mais tolerantes do que as calibradas contra texto embutido limpo.",
 			"O idioma padrão do OCR é \"por\" (--ocr-lang); ele exige o pacote de idioma português do Tesseract instalado — sem ele, o reconhecimento cai no idioma padrão do Tesseract e a precisão tende a cair bastante.",
 			"Recomenda-se sempre testar com --dry-run antes de aplicar de verdade, especialmente ao calibrar uma regex nova — o modo interativo já inclui esse teste como etapa obrigatória antes de aplicar.",
 			"Nomes de pasta e de arquivo derivados de um grupo de captura são sanitizados: separadores de caminho, sequências \"..\", caracteres inválidos em nomes de arquivo no Windows e caracteres de controle são substituídos por \"_\".",
-			"dry_run e sample nunca são persistidos num perfil salvo: são sempre decididos na hora da execução, nunca fazem parte da configuração salva.",
+			"dry_run e sample nunca são persistidos num perfil salvo: são sempre decididos na hora da execução, nunca fazem parte da configuração salva. report e report_format, ao contrário, SÃO persistidos — é razoável querer sempre gerar o relatório no mesmo caminho toda vez que um perfil é aplicado.",
+			"--report também é gerado com --dry-run — é justamente aí que ele mais serve, permitindo conferir a classificação numa planilha antes de mexer nos arquivos de verdade. Uma falha ao gravar o relatório (ex: caminho sem permissão) nunca falha a organização, que já aconteceu: vira um aviso no resultado.",
+			"O CSV gerado por --report sai com BOM UTF-8 no início do arquivo, porque o público desta ferramenta costuma abrir o relatório dando duplo-clique no Excel em português — sem o BOM, o Excel interpreta o arquivo como Windows-1252 e os acentos saem corrompidos. As linhas do relatório saem ordenadas por nome de arquivo, para que duas execuções do mesmo lote sejam comparáveis.",
 		},
 	}
 }

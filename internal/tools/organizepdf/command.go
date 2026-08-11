@@ -3,6 +3,7 @@ package organizepdf
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -152,6 +153,30 @@ func (t *Tool) params() []tool.Param {
 				fs.StringVar(&t.opts.OCRLang, "ocr-lang", t.opts.OCRLang, `Idioma do OCR (ex: "por", "eng")`)
 			},
 		},
+		{
+			Name:      "report",
+			Shorthand: "",
+			Type:      "string",
+			Description: "Caminho do arquivo de relatório desta execução (uma linha por arquivo considerado, " +
+				"classificado ou não, com o motivo quando não classificado); vazio = não gera. Também funciona " +
+				"com --dry-run — é aliás quando mais serve, para conferir a classificação antes de aplicar",
+			Default: "",
+			Example: "--report ./relatorio-organizacao.csv",
+			BindFlag: func(fs *pflag.FlagSet) {
+				fs.StringVar(&t.opts.Report, "report", t.opts.Report, "Caminho do arquivo de relatório desta execução; vazio = não gera")
+			},
+		},
+		{
+			Name:        "report-format",
+			Shorthand:   "",
+			Type:        "string",
+			Description: `Formato do relatório gerado por --report: "csv" ou "json"`,
+			Default:     "csv",
+			Example:     "--report-format json",
+			BindFlag: func(fs *pflag.FlagSet) {
+				fs.StringVar(&t.opts.ReportFormat, "report-format", t.opts.ReportFormat, `Formato do relatório gerado por --report: "csv" ou "json"`)
+			},
+		},
 	}
 }
 
@@ -294,6 +319,53 @@ func historyRecorder(inputDir, outputDir string) func(action string, entries []p
 	}
 }
 
+// writeReportFile monta as linhas do relatório a partir de result e grava
+// no caminho path, no formato informado ("csv" ou "json" — já validado por
+// NormalizeReportFormat antes de chegar aqui), criando os diretórios
+// intermediários que faltarem. Devolve o caminho absoluto gravado, para a
+// confirmação em tool.Result.Details.
+//
+// Erros aqui (ex: path aponta para um diretório sem permissão de escrita,
+// ou para um diretório já existente) são devolvidos ao chamador, que NUNCA
+// os trata como falha da organização em si (ver comentário em runWith) —
+// a mesma regra já aplicada à falha de gravação do manifesto de histórico.
+func writeReportFile(path, format string, result pdfutil.OrganizeResult) (string, error) {
+	absPath, absErr := filepath.Abs(path)
+	if absErr != nil {
+		absPath = path
+	}
+
+	if dir := filepath.Dir(absPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", fmt.Errorf("criar diretório do relatório %q: %w", dir, err)
+		}
+	}
+
+	f, err := os.Create(absPath)
+	if err != nil {
+		return "", fmt.Errorf("criar arquivo de relatório %q: %w", absPath, err)
+	}
+
+	rows := pdfutil.BuildReport(result)
+
+	var writeErr error
+	if format == "json" {
+		writeErr = pdfutil.WriteReportJSON(f, rows)
+	} else {
+		writeErr = pdfutil.WriteReportCSV(f, rows)
+	}
+
+	closeErr := f.Close()
+	if writeErr != nil {
+		return "", fmt.Errorf("gravar relatório %q: %w", absPath, writeErr)
+	}
+	if closeErr != nil {
+		return "", fmt.Errorf("fechar arquivo de relatório %q: %w", absPath, closeErr)
+	}
+
+	return absPath, nil
+}
+
 // runWith organiza os PDFs de t.opts.InputDir em t.opts.OutputDir, com os
 // overrides de dryRun e sample informados (usados pelo fluxo interativo
 // para testar a calibração antes de aplicar de verdade). run() é apenas
@@ -304,6 +376,19 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 	}
 	if strings.TrimSpace(t.opts.OutputDir) == "" {
 		return tool.Result{}, fmt.Errorf("informe a pasta de destino (--output)")
+	}
+
+	// Validado ANTES de qualquer processamento de arquivo, de propósito:
+	// falhar por causa de um erro de digitação em --report-format depois de
+	// já ter movido ou copiado um lote inteiro seria cruel.
+	reportPath := strings.TrimSpace(t.opts.Report)
+	reportFormat := ""
+	if reportPath != "" {
+		f, err := NormalizeReportFormat(t.opts.ReportFormat)
+		if err != nil {
+			return tool.Result{}, err
+		}
+		reportFormat = f
 	}
 
 	levelSpecs := t.opts.Levels
@@ -370,14 +455,34 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 		return tool.Result{}, err
 	}
 
+	var reportConfirmation string
+	if reportPath != "" {
+		absReportPath, repErr := writeReportFile(reportPath, reportFormat, result)
+		if repErr != nil {
+			// Mesma lógica já usada para o manifesto de histórico: a
+			// organização já aconteceu de verdade, e falhar (ou fingir que
+			// não aconteceu) por causa de um artefato acessório seria pior
+			// do que só avisar e seguir.
+			result.Warnings = append(result.Warnings, fmt.Sprintf(
+				"não foi possível gravar o relatório desta execução em %q (a organização já aconteceu normalmente): %v",
+				reportPath, repErr,
+			))
+		} else {
+			reportConfirmation = fmt.Sprintf("relatório gravado em %s", absReportPath)
+		}
+	}
+
 	summary := result.Summary()
 	if dryRun {
 		summary += " — nada foi copiado ou movido"
 	}
 
-	details := make([]string, 0, maxUnclassifiedDetails+1)
+	details := make([]string, 0, maxUnclassifiedDetails+2)
 	details = append(details, ocrWarnings(textOpts)...)
 	details = append(details, result.Warnings...)
+	if reportConfirmation != "" {
+		details = append(details, reportConfirmation)
+	}
 	for i, entry := range result.Unclassified {
 		if i >= maxUnclassifiedDetails {
 			details = append(details, fmt.Sprintf("... e mais %d", len(result.Unclassified)-maxUnclassifiedDetails))

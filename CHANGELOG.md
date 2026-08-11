@@ -18,6 +18,15 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.6.0] - 2026-08-11
+
+### Adicionado
+
+- **Relatório da organização (`organize-pdf --report`).** O resultado de uma organização aparecia resumido na tela e desaparecia quando o terminal fechava. Num lote de notas fiscais isso não basta: é preciso poder conferir depois por que cada arquivo foi parar onde foi, e quais não foram classificados. `--report <caminho>` grava um arquivo com uma linha por arquivo considerado, classificado ou não, incluindo o motivo da não-classificação (ex.: `nível "fornecedor" não encontrado`). `--report-format` escolhe entre `csv` (padrão) e `json`.
+- **O relatório também é gerado com `--dry-run`** — é justamente aí que ele mais serve, permitindo conferir a classificação inteira numa planilha antes de tocar em qualquer arquivo de verdade.
+- O CSV sai com **BOM UTF-8**, porque o público desta ferramenta abre o relatório no Excel em português — sem o BOM os acentos chegam corrompidos. As linhas saem sempre ordenadas por nome de arquivo, para que duas execuções do mesmo lote sejam comparáveis. Assim como o manifesto de histórico (v0.5.0), uma falha ao gravar o relatório nunca falha a organização, que já aconteceu: vira um aviso no resultado.
+- Novo arquivo `internal/pdfutil/report.go`: `BuildReport` (função pura), `WriteReportCSV` e `WriteReportJSON`. `Options.Report`/`Options.ReportFormat` são persistidos no perfil salvo, ao contrário de `dry_run`/`sample`.
+
 ## [0.5.0] - 2026-08-11
 
 ### Adicionado

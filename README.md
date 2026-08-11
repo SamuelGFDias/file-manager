@@ -105,6 +105,8 @@ Organiza PDFs de uma pasta em uma hierarquia de subpastas com base no conteúdo 
 | `--overwrite` | bool | Sobrescrever arquivos existentes |
 | `--ocr` | string | Uso de OCR em PDFs sem texto embutido: `auto` (só quando não há texto), `always` ou `never` (default: `auto`) |
 | `--ocr-lang` | string | Idioma do OCR (ex: `por`, `eng`) (default: `por`) |
+| `--report` | string | Caminho do arquivo de relatório desta execução; vazio (default) = não gera |
+| `--report-format` | string | Formato do relatório: `csv` ou `json` (default: `csv`) |
 
 **Exemplos:**
 
@@ -123,6 +125,28 @@ file-manager organize-pdf -i ./invoices -o ./invoices_organized \
 ```
 
 Com zero `--level`, a ferramenta funciona como um renomeador em lote dos PDFs.
+
+## Relatório da organização
+
+O resultado de uma organização aparece resumido na tela e some quando o terminal fecha. Num lote de notas fiscais isso não basta: mais cedo ou mais tarde alguém vai precisar conferir por que uma nota específica foi parar em determinada pasta, ou quais notas não foram classificadas e por quê — é rastreabilidade, não conveniência.
+
+```bash
+file-manager organize-pdf --input ./notas --output ./organizado \
+  --level "fornecedor=FORNECEDOR:\s*(\w+)" --report ./relatorio-organizacao.csv
+```
+
+`--report <caminho>` grava um arquivo com **uma linha por arquivo considerado**, classificado ou não, com estas colunas: `arquivo, origem, destino, classificado, motivo`. Para um arquivo não classificado, `destino` fica vazio e `motivo` explica o porquê (ex.: `nível "fornecedor" não encontrado`, `nome do arquivo não encontrado`). `--report-format` escolhe entre `csv` (default, para abrir numa planilha) e `json` (para quem for processar o relatório por programa).
+
+**Funciona junto com `--dry-run`** — e é justamente aí que ele mais serve: gera o relatório completo, com a classificação de cada arquivo, sem copiar ou mover nada, para conferir numa planilha antes de aplicar de verdade.
+
+```bash
+file-manager organize-pdf --input ./notas --output ./organizado \
+  --level "fornecedor=FORNECEDOR:\s*(\w+)" --dry-run --report ./relatorio-organizacao.csv
+```
+
+O CSV é gravado com **BOM UTF-8** no início do arquivo: sem ele, o Excel em português (o programa mais provável para abrir este relatório) interpreta o conteúdo como Windows-1252 e os acentos saem corrompidos. As linhas do relatório saem sempre ordenadas por nome de arquivo, para que duas execuções do mesmo lote possam ser comparadas lado a lado.
+
+Assim como o manifesto de histórico, uma falha ao gravar o relatório (ex.: caminho sem permissão de escrita) nunca falha a organização, que já aconteceu de verdade — vira apenas um aviso no resultado.
 
 ## Desfazer uma organização
 
