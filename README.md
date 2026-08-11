@@ -229,6 +229,8 @@ internal/config/           Gerenciamento de perfis YAML
 internal/pdfutil/          Núcleo: merge, split, organize, extração de texto
 internal/regexcalib/       Sugestão de regex por exemplo
 internal/tools/            Uma subpasta por ferramenta
+internal/testcli/          Harness de teste ponta a ponta (terminal virtual, só Linux)
+e2e/                       Cenários de teste ponta a ponta (rodam via "make e2e")
 ```
 
 ### Adicionar uma ferramenta nova
@@ -245,10 +247,15 @@ Veja [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) para o passo a passo completo.
 make build      # Compilar para a plataforma atual
 make build-all  # Compilar para Linux e Windows
 make test       # Executar testes
+make e2e        # Executar testes ponta a ponta (terminal virtual, só Linux, mais lentos)
 make lint       # Executar verificações de lint
 make fmt        # Formatar código
 make clean      # Remover artefatos de build
 ```
+
+### Testes ponta a ponta
+
+Além da suíte normal (`make test`), há testes que abrem o binário real dentro de um terminal virtual, enviam teclas como um usuário faria e verificam o que aparece na tela — cobrem navegação interativa (menu, seleção encadeada de pastas em `organize-pdf`) que `go test ./...` não exercita. Ficam em `e2e/` (mais o harness em `internal/testcli/`), rodam só em Linux e são mais lentos, por isso vivem fora do `make test` e têm alvo próprio: `make e2e`. Detalhes em [AGENTS.md](AGENTS.md#testes-ponta-a-ponta-e2e).
 
 ## OCR
 
