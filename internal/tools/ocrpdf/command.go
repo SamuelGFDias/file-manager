@@ -12,10 +12,155 @@ import (
 	"github.com/SamuelGFDias/file-manager/internal/ocr"
 	"github.com/SamuelGFDias/file-manager/internal/pdfutil"
 	"github.com/SamuelGFDias/file-manager/internal/tool"
+	"github.com/SamuelGFDias/file-manager/internal/ui"
 	"github.com/SamuelGFDias/file-manager/internal/ui/filepicker"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
+
+// maxEmptyInputsAttempts limita quantas vezes o laço de "adicionar
+// entradas" pode terminar sem nenhum arquivo ou pasta escolhido antes de o
+// fluxo desistir — mesmo espírito de proteção contra laço infinito que
+// organize-pdf já usa (ver maxSourceDirAttempts). Na prática dificilmente é
+// atingido: filepicker.PickFiles (internal/ui/filepicker) já impede
+// confirmar uma seleção de arquivos vazia, e "Incluir uma pasta inteira"
+// sempre acrescenta algo. Mesmo assim o guard fica aqui: o defeito original
+// era justamente uma contagem zero atravessando sem ninguém perceber, então
+// esta é a última linha de defesa, não a única — o fluxo NUNCA avança para
+// as perguntas seguintes (sufixo, idioma, sobrescrita, retomada) com
+// t.opts.Inputs vazio.
+const maxEmptyInputsAttempts = 3
+
+// emptyInputsAdvice decide a mensagem de aviso e se o laço de escolha de
+// entradas deve desistir (giveUp), dado quantas tentativas já foram usadas
+// sem que nenhuma entrada tenha sido acrescentada. Função pura, testável
+// sem terminal.
+func emptyInputsAdvice(attempt, maxAttempts int) (message string, giveUp bool) {
+	if attempt >= maxAttempts {
+		return fmt.Sprintf(
+			"nenhum arquivo ou pasta foi adicionado; limite de %d tentativas atingido — cancelando.",
+			maxAttempts,
+		), true
+	}
+	return fmt.Sprintf("nenhum arquivo ou pasta foi adicionado (tentativa %d de %d).", attempt, maxAttempts), false
+}
+
+// pickInputs conduz o laço de escolha de entradas (t.opts.Inputs) e só
+// devolve quando pelo menos uma entrada foi adicionada, o usuário desistiu
+// explicitamente, ou o limite de tentativas foi atingido — nunca com
+// t.opts.Inputs vazio e sem erro. É o que garante que o fluxo interativo
+// (screen.go, via tool.PromptAll) só chega às perguntas seguintes (sufixo,
+// idioma, sobrescrita, retomada) com pelo menos um arquivo ou pasta
+// escolhido.
+func (t *Tool) pickInputs() error {
+	for attempt := 1; attempt <= maxEmptyInputsAttempts; attempt++ {
+		if err := t.collectInputsOnce(); err != nil {
+			return err
+		}
+
+		if len(t.opts.Inputs) > 0 {
+			return nil
+		}
+
+		message, giveUp := emptyInputsAdvice(attempt, maxEmptyInputsAttempts)
+		ui.Warnf("%s", message)
+		if giveUp {
+			return filepicker.ErrCancelled
+		}
+
+		retry := true
+		if err := survey.AskOne(&survey.Confirm{
+			Message: "Tentar escolher entradas novamente?",
+			Default: true,
+		}, &retry); err != nil {
+			return err
+		}
+		if !retry {
+			return filepicker.ErrCancelled
+		}
+	}
+
+	return filepicker.ErrCancelled
+}
+
+// collectInputsOnce pergunta como adicionar entradas (arquivos específicos
+// ou uma pasta inteira), acrescenta o que for escolhido a t.opts.Inputs, e
+// repete enquanto o usuário quiser adicionar mais. Não valida por si só se
+// alguma entrada foi de fato adicionada — quem faz isso é pickInputs, que a
+// chama.
+func (t *Tool) collectInputsOnce() error {
+	for {
+		var choice string
+		if err := survey.AskOne(&survey.Select{
+			Message: "Como deseja adicionar entradas para processar?",
+			Options: []string{"Escolher arquivos específicos", "Incluir uma pasta inteira"},
+		}, &choice); err != nil {
+			return err
+		}
+
+		switch choice {
+		case "Escolher arquivos específicos":
+			files, err := filepicker.PickFiles(".", []string{".pdf"})
+			if err != nil {
+				return err
+			}
+			t.opts.Inputs = append(t.opts.Inputs, files...)
+		case "Incluir uma pasta inteira":
+			dir, err := filepicker.PickDir(".")
+			if err != nil {
+				return err
+			}
+			t.opts.Inputs = append(t.opts.Inputs, dir)
+
+			var depthChoice string
+			if err := survey.AskOne(&survey.Select{
+				Message: "Profundidade de varredura da pasta",
+				Options: []string{
+					"Só esta pasta (0)",
+					"Esta pasta e subpastas diretas (1)",
+					"Todos os níveis (-1)",
+					"Personalizado",
+				},
+			}, &depthChoice); err != nil {
+				return err
+			}
+
+			switch depthChoice {
+			case "Só esta pasta (0)":
+				t.opts.MaxDepth = 0
+			case "Esta pasta e subpastas diretas (1)":
+				t.opts.MaxDepth = 1
+			case "Todos os níveis (-1)":
+				t.opts.MaxDepth = -1
+			case "Personalizado":
+				var raw string
+				if err := survey.AskOne(&survey.Input{
+					Message: "Profundidade personalizada (número inteiro; -1 para ilimitado)",
+				}, &raw); err != nil {
+					return err
+				}
+				depth, err := strconv.Atoi(strings.TrimSpace(raw))
+				if err != nil {
+					return fmt.Errorf("profundidade inválida %q: %w", raw, err)
+				}
+				t.opts.MaxDepth = depth
+			}
+		}
+
+		var more bool
+		if err := survey.AskOne(&survey.Confirm{
+			Message: "Adicionar mais arquivos ou pastas?",
+			Default: false,
+		}, &more); err != nil {
+			return err
+		}
+		if !more {
+			break
+		}
+	}
+
+	return nil
+}
 
 // params declara os parâmetros aceitos por ocr-pdf. Cada tool.Param
 // conecta o mesmo campo de t.opts a uma flag do cobra (BindFlag), a uma
@@ -36,79 +181,7 @@ func (t *Tool) params() []tool.Param {
 			BindFlag: func(fs *pflag.FlagSet) {
 				fs.StringSliceVarP(&t.opts.Inputs, "input", "i", t.opts.Inputs, "Arquivo PDF ou pasta a processar. Pode repetir")
 			},
-			Prompt: func() error {
-				for {
-					var choice string
-					if err := survey.AskOne(&survey.Select{
-						Message: "Como deseja adicionar entradas para processar?",
-						Options: []string{"Escolher arquivos específicos", "Incluir uma pasta inteira"},
-					}, &choice); err != nil {
-						return err
-					}
-
-					switch choice {
-					case "Escolher arquivos específicos":
-						files, err := filepicker.PickFiles(".", []string{".pdf"})
-						if err != nil {
-							return err
-						}
-						t.opts.Inputs = append(t.opts.Inputs, files...)
-					case "Incluir uma pasta inteira":
-						dir, err := filepicker.PickDir(".")
-						if err != nil {
-							return err
-						}
-						t.opts.Inputs = append(t.opts.Inputs, dir)
-
-						var depthChoice string
-						if err := survey.AskOne(&survey.Select{
-							Message: "Profundidade de varredura da pasta",
-							Options: []string{
-								"Só esta pasta (0)",
-								"Esta pasta e subpastas diretas (1)",
-								"Todos os níveis (-1)",
-								"Personalizado",
-							},
-						}, &depthChoice); err != nil {
-							return err
-						}
-
-						switch depthChoice {
-						case "Só esta pasta (0)":
-							t.opts.MaxDepth = 0
-						case "Esta pasta e subpastas diretas (1)":
-							t.opts.MaxDepth = 1
-						case "Todos os níveis (-1)":
-							t.opts.MaxDepth = -1
-						case "Personalizado":
-							var raw string
-							if err := survey.AskOne(&survey.Input{
-								Message: "Profundidade personalizada (número inteiro; -1 para ilimitado)",
-							}, &raw); err != nil {
-								return err
-							}
-							depth, err := strconv.Atoi(strings.TrimSpace(raw))
-							if err != nil {
-								return fmt.Errorf("profundidade inválida %q: %w", raw, err)
-							}
-							t.opts.MaxDepth = depth
-						}
-					}
-
-					var more bool
-					if err := survey.AskOne(&survey.Confirm{
-						Message: "Adicionar mais arquivos ou pastas?",
-						Default: false,
-					}, &more); err != nil {
-						return err
-					}
-					if !more {
-						break
-					}
-				}
-
-				return nil
-			},
+			Prompt: t.pickInputs,
 		},
 		{
 			Name:        "max-depth",

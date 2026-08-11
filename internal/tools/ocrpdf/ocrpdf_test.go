@@ -76,6 +76,34 @@ func TestFormatProgressLine(t *testing.T) {
 	}
 }
 
+// TestEmptyInputsAdvice_RetriesBeforeLimit cobre o caso comum: ainda há
+// tentativas sobrando, então o laço de escolha de entradas (pickInputs) não
+// deve desistir.
+func TestEmptyInputsAdvice_RetriesBeforeLimit(t *testing.T) {
+	message, giveUp := emptyInputsAdvice(1, maxEmptyInputsAttempts)
+
+	if giveUp {
+		t.Fatalf("emptyInputsAdvice(1, %d) desistiu antes do limite", maxEmptyInputsAttempts)
+	}
+	if !strings.Contains(message, "nenhum arquivo ou pasta") {
+		t.Errorf("mensagem %q não menciona a ausência de entradas", message)
+	}
+}
+
+// TestEmptyInputsAdvice_GivesUpAtLimit cobre a última tentativa: o laço tem
+// que desistir para nunca virar um laço infinito, e a mensagem final deve
+// deixar claro que o limite foi atingido.
+func TestEmptyInputsAdvice_GivesUpAtLimit(t *testing.T) {
+	message, giveUp := emptyInputsAdvice(maxEmptyInputsAttempts, maxEmptyInputsAttempts)
+
+	if !giveUp {
+		t.Fatalf("emptyInputsAdvice(%d, %d) deveria desistir no limite de tentativas", maxEmptyInputsAttempts, maxEmptyInputsAttempts)
+	}
+	if !strings.Contains(message, "limite") {
+		t.Errorf("mensagem %q não menciona o limite de tentativas", message)
+	}
+}
+
 func TestProfileEmptyReturnsDefaults(t *testing.T) {
 	tl := New()
 	profile := tl.Profile()

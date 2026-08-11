@@ -1,6 +1,7 @@
 package mergepdf
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -25,6 +26,34 @@ func TestCommandUse(t *testing.T) {
 	want := "merge-pdf"
 	if use != want {
 		t.Fatalf("Command().Use = %q, want %q", use, want)
+	}
+}
+
+// TestEmptyInputsAdvice_RetriesBeforeLimit cobre o caso comum: ainda há
+// tentativas sobrando, então o laço de escolha de entradas (pickInputs) não
+// deve desistir. Mesmo defeito e mesma correção que ocr-pdf (ver
+// internal/tools/ocrpdf/ocrpdf_test.go).
+func TestEmptyInputsAdvice_RetriesBeforeLimit(t *testing.T) {
+	message, giveUp := emptyInputsAdvice(1, maxEmptyInputsAttempts)
+
+	if giveUp {
+		t.Fatalf("emptyInputsAdvice(1, %d) desistiu antes do limite", maxEmptyInputsAttempts)
+	}
+	if !strings.Contains(message, "nenhum arquivo ou pasta") {
+		t.Errorf("mensagem %q não menciona a ausência de entradas", message)
+	}
+}
+
+// TestEmptyInputsAdvice_GivesUpAtLimit cobre a última tentativa: o laço tem
+// que desistir para nunca virar um laço infinito.
+func TestEmptyInputsAdvice_GivesUpAtLimit(t *testing.T) {
+	message, giveUp := emptyInputsAdvice(maxEmptyInputsAttempts, maxEmptyInputsAttempts)
+
+	if !giveUp {
+		t.Fatalf("emptyInputsAdvice(%d, %d) deveria desistir no limite de tentativas", maxEmptyInputsAttempts, maxEmptyInputsAttempts)
+	}
+	if !strings.Contains(message, "limite") {
+		t.Errorf("mensagem %q não menciona o limite de tentativas", message)
 	}
 }
 

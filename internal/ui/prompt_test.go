@@ -13,13 +13,18 @@ import (
 // que permite chamá-la sem custo extra a cada NewScreen do menu principal.
 func TestApplyThemeIdempotent(t *testing.T) {
 	ApplyTheme()
-	first := survey.SelectQuestionTemplate
+	firstSelect := survey.SelectQuestionTemplate
+	firstMultiSelect := survey.MultiSelectQuestionTemplate
 
 	ApplyTheme()
-	second := survey.SelectQuestionTemplate
+	secondSelect := survey.SelectQuestionTemplate
+	secondMultiSelect := survey.MultiSelectQuestionTemplate
 
-	if first != second {
-		t.Fatalf("ApplyTheme() não é idempotente: template mudou entre chamadas")
+	if firstSelect != secondSelect {
+		t.Fatalf("ApplyTheme() não é idempotente: template de Select mudou entre chamadas")
+	}
+	if firstMultiSelect != secondMultiSelect {
+		t.Fatalf("ApplyTheme() não é idempotente: template de MultiSelect mudou entre chamadas")
 	}
 }
 
@@ -56,6 +61,41 @@ func TestApplyThemeTemplateCompiles(t *testing.T) {
 
 	if _, err := template.New("select-template-test").Funcs(noopFuncs).Parse(survey.SelectQuestionTemplate); err != nil {
 		t.Fatalf("template instalado por ApplyTheme() não compila: %v", err)
+	}
+}
+
+// TestApplyThemeInstallsSpaceHintOnMultiSelect prova que o template de
+// MultiSelect foi de fato traduzido: a dica em português menciona a barra
+// de espaço (o ponto central do defeito relatado — o usuário não sabia que
+// a marcação é feita com espaço, não com Enter), e a dica original em
+// inglês não está mais presente.
+func TestApplyThemeInstallsSpaceHintOnMultiSelect(t *testing.T) {
+	ApplyTheme()
+
+	tmpl := survey.MultiSelectQuestionTemplate
+
+	if !strings.Contains(tmpl, "ESPAÇO") {
+		t.Fatalf("template de MultiSelect não menciona a barra de espaço: %q", tmpl)
+	}
+
+	if strings.Contains(tmpl, "space to select") {
+		t.Fatalf("template de MultiSelect ainda contém a dica em inglês \"space to select\": %q", tmpl)
+	}
+}
+
+// TestApplyThemeMultiSelectTemplateCompiles garante que o template de
+// MultiSelect instalado por ApplyTheme() é um text/template válido — mesma
+// rede de proteção que TestApplyThemeTemplateCompiles já dá ao template de
+// Select.
+func TestApplyThemeMultiSelectTemplateCompiles(t *testing.T) {
+	ApplyTheme()
+
+	noopFuncs := template.FuncMap{
+		"color": func(string) string { return "" },
+	}
+
+	if _, err := template.New("multiselect-template-test").Funcs(noopFuncs).Parse(survey.MultiSelectQuestionTemplate); err != nil {
+		t.Fatalf("template de MultiSelect instalado por ApplyTheme() não compila: %v", err)
 	}
 }
 
