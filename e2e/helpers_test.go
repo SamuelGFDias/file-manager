@@ -3,6 +3,9 @@
 package e2e
 
 import (
+	"bytes"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -57,4 +60,25 @@ func startBin(t *testing.T, dir string, extraEnv ...string) *testcli.Session {
 		Dir: dir,
 		Env: env,
 	})
+}
+
+// runCLIExpectingError executa o binário sob teste diretamente (sem
+// terminal virtual, mesmo espírito de runCLI em undo_test.go), mas — ao
+// contrário de runCLI, que falha o teste (t.Fatalf) se o processo sair com
+// erro — devolve o erro para o chamador decidir: usada por cenários cuja
+// prova é exatamente que o comando FALHA (ex: validação de flags
+// incompatíveis), onde err == nil seria a regressão a pegar.
+func runCLIExpectingError(t *testing.T, dir string, args []string, extraEnv ...string) (stdout, stderr string, err error) {
+	t.Helper()
+
+	cmd := exec.Command(binPath, args...)
+	cmd.Dir = dir
+	cmd.Env = append(append(os.Environ(), isolatedEnv(t)...), extraEnv...)
+
+	var out, errBuf bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+
+	err = cmd.Run()
+	return out.String(), errBuf.String(), err
 }

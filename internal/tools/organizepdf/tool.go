@@ -72,7 +72,19 @@ func (t *Tool) Doc() tool.Doc {
 			"--report grava um relatório desta execução (uma linha por arquivo considerado, classificado ou " +
 			"não, com o motivo quando não classificado) em CSV (padrão) ou JSON (--report-format json); " +
 			"funciona também com --dry-run, que é justamente quando mais serve — permite conferir a " +
-			"classificação inteira numa planilha antes de tocar em qualquer arquivo de verdade.",
+			"classificação inteira numa planilha antes de tocar em qualquer arquivo de verdade.\n\n" +
+			"--csv inverte a fonte da hierarquia: em vez de extraí-la do conteúdo do PDF via --level, uma " +
+			"planilha já diz onde cada documento deve ser arquivado, e o PDF fornece só a CHAVE (extraída " +
+			"via --csv-key-regex) usada para procurar a linha correspondente. A primeira coluna da " +
+			"planilha (ou --csv-key-column) é a chave; as demais colunas (ou --csv-levels, na ordem " +
+			"informada) formam os níveis de pasta. Os nomes de pasta resultantes são normalizados: acentos " +
+			"são removidos e espaços viram \"_\", porque nome de pasta acentuado dá problema em rede " +
+			"compartilhada e em ambiente misto Windows/Linux. --csv é incompatível com --level (a " +
+			"hierarquia vem de um ou de outro, nunca dos dois) e exige --csv-key-regex. A planilha aceita " +
+			"separador vírgula ou ponto e vírgula (detectado automaticamente — o Excel em português salva " +
+			"com \";\" por padrão) e descarta o BOM UTF-8 que o Excel costuma gravar. Uma chave que o " +
+			"regex encontra no PDF mas que não existe na planilha não interrompe o lote: o arquivo vai " +
+			"para --unclassified-dir com o motivo citando a chave encontrada, para conferir na planilha.",
 		WhenToUse: []string{
 			"quando o usuário tiver uma pasta cheia de PDFs (ex: notas fiscais, contratos, boletos) e quiser organizá-los automaticamente em subpastas a partir de algo escrito no próprio documento",
 			"quando o usuário quiser renomear em lote vários PDFs pelo conteúdo (ex: pelo número da nota fiscal), sem necessariamente movê-los para subpastas",
@@ -110,6 +122,11 @@ func (t *Tool) Doc() tool.Doc {
 				Command: `file-manager organize-pdf --input ./notas --output ./organizado ` +
 					`--level "fornecedor=FORNECEDOR:\s*(\w+)" --dry-run --report ./relatorio-organizacao.csv`,
 			},
+			{
+				Title: "Organizar a partir de uma planilha que já define a hierarquia de pastas (o PDF fornece só a chave)",
+				Command: `file-manager organize-pdf --input ./notas --output ./organizado ` +
+					`--csv ./planilha.csv --csv-key-regex "NOTA:\s*(\d+)"`,
+			},
 		},
 		ProfileSchema: `input_dir: ./notas
 output_dir: ./organizado
@@ -125,7 +142,11 @@ overwrite: false
 ocr: auto
 ocr_lang: por
 report: ''
-report_format: csv`,
+report_format: csv
+csv: ''
+csv_key_regex: ''
+csv_key_column: ''
+csv_levels: []`,
 		Notes: []string{
 			"PDFs digitalizados (imagem sem camada de texto) passam por OCR via Tesseract quando --ocr é \"auto\" (padrão, aplica OCR só nas páginas sem texto embutido) ou \"always\" (força OCR em todas as páginas, ignorando texto embutido); --ocr never desliga o OCR. Sem o Tesseract instalado no sistema, esses PDFs continuam sem texto para casar com qualquer regex e caem em --unclassified-dir, mesmo com --ocr auto ou always.",
 			"OCR é sensivelmente mais lento que a extração de texto embutido (da ordem de ~1s por página) e pode errar caracteres (ex: confundir \"0\" com \"O\"), então regex calibradas contra texto de OCR costumam se beneficiar de padrões mais tolerantes do que as calibradas contra texto embutido limpo.",
@@ -135,6 +156,8 @@ report_format: csv`,
 			"dry_run e sample nunca são persistidos num perfil salvo: são sempre decididos na hora da execução, nunca fazem parte da configuração salva. report e report_format, ao contrário, SÃO persistidos — é razoável querer sempre gerar o relatório no mesmo caminho toda vez que um perfil é aplicado.",
 			"--report também é gerado com --dry-run — é justamente aí que ele mais serve, permitindo conferir a classificação numa planilha antes de mexer nos arquivos de verdade. Uma falha ao gravar o relatório (ex: caminho sem permissão) nunca falha a organização, que já aconteceu: vira um aviso no resultado.",
 			"O CSV gerado por --report sai com BOM UTF-8 no início do arquivo, porque o público desta ferramenta costuma abrir o relatório dando duplo-clique no Excel em português — sem o BOM, o Excel interpreta o arquivo como Windows-1252 e os acentos saem corrompidos. As linhas do relatório saem ordenadas por nome de arquivo, para que duas execuções do mesmo lote sejam comparáveis.",
+			"--csv (hierarquia de pastas vinda de uma planilha) é incompatível com --level e exige --csv-key-regex; as flags --csv-key-column e --csv-levels só têm efeito junto com --csv. A planilha aceita separador vírgula ou ponto e vírgula (detecção automática pela primeira linha) e descarta o BOM UTF-8 no início do arquivo, se presente. Chaves são comparadas como texto, com espaços das pontas removidos — nunca convertidas para número, então \"001\" e \"1\" são chaves diferentes. Uma chave duplicada na planilha é erro (citando a chave), mas uma célula de nível vazia não é: o componente correspondente é só omitido, com um aviso no resultado citando a chave e a coluna.",
+			"Em modo --csv, o nome do arquivo de destino é a própria chave encontrada no PDF, por padrão; --filename-regex, quando informado, continua valendo normalmente e sobrepõe a chave.",
 		},
 	}
 }

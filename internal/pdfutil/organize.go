@@ -80,6 +80,70 @@ func ResolveDestination(text string, levels []Level, filenameRegex *regexp.Regex
 	return result, nil
 }
 
+// ResolveDestinationCSV calcula o caminho relativo de destino de um
+// documento cuja hierarquia de pastas vem de uma planilha (csvMap), em vez
+// do conteúdo do PDF: keyRegex extrai a chave do texto (grupo de captura 1,
+// ou o trecho inteiro casado sem grupo), csvMap.Lookup resolve a chave para
+// os componentes de pasta, e o nome do arquivo é a própria chave — a menos
+// que filenameRegex seja informado, caso em que ele vence, exatamente como
+// em ResolveDestination.
+//
+// Duas formas de não-classificação são específicas deste modo, ambas com
+// Unmatched.Level == "chave" (Unmatched.Pattern já vem pronto como a frase
+// final em português, no mesmo padrão usado por "destino" — ver
+// UnmatchedReason em report.go): a regex não casar com o texto do
+// documento, e a chave encontrada não existir na planilha. Este segundo
+// caso é, na prática, o mais frequente — por isso a mensagem cita a chave
+// encontrada, para o usuário conferir na planilha.
+func ResolveDestinationCSV(text string, csvMap CSVMap, keyRegex *regexp.Regexp, filenameRegex *regexp.Regexp) (relPath string, unmatched *Unmatched) {
+	km := keyRegex.FindStringSubmatch(text)
+	if km == nil {
+		return "", &Unmatched{Level: "chave", Pattern: "chave não encontrada no documento"}
+	}
+	key := km[0]
+	if len(km) > 1 {
+		key = km[1]
+	}
+	key = strings.TrimSpace(key)
+
+	components, ok := csvMap.Lookup(key)
+	if !ok {
+		return "", &Unmatched{Level: "chave", Pattern: fmt.Sprintf("chave %q não está na planilha", key)}
+	}
+
+	var name string
+	if filenameRegex != nil {
+		fm := filenameRegex.FindStringSubmatch(text)
+		if fm == nil {
+			return "", &Unmatched{Level: "filename", Pattern: filenameRegex.String()}
+		}
+		value := fm[0]
+		if len(fm) > 1 {
+			value = fm[1]
+		}
+		value = SanitizeFilename(value)
+		if value == "" {
+			return "", &Unmatched{Level: "filename", Pattern: filenameRegex.String()}
+		}
+		name = value
+	} else {
+		name = SanitizeFilename(key)
+		if name == "" {
+			name = "sem-valor"
+		}
+	}
+
+	parts := append([]string{}, components...)
+	parts = append(parts, withPDFExt(name))
+	result := filepath.Join(parts...)
+
+	if result != "" && (filepath.IsAbs(result) || result == ".." || strings.HasPrefix(result, ".."+string(filepath.Separator))) {
+		return "", &Unmatched{Level: "destino", Pattern: "caminho resultante inválido"}
+	}
+
+	return result, nil
+}
+
 // RecordedEntry descreve um único arquivo efetivamente copiado ou movido
 // por uma execução real (nunca uma simulação) de Organize, repassado a
 // OrganizeOptions.Recorder para quem quiser persistir um histórico
@@ -96,16 +160,33 @@ type RecordedEntry struct {
 // OrganizeOptions descreve os parâmetros de uma operação de organização de
 // uma pasta de PDFs.
 type OrganizeOptions struct {
-	InputDir        string
-	OutputDir       string
+	InputDir  string
+	OutputDir string
+	// Levels são os níveis de pasta calibrados por regex sobre o conteúdo
+	// de cada PDF. Ignorado quando CSV não é nil: a hierarquia vem da
+	// planilha, não do conteúdo — quem chama Organize (o comando
+	// organize-pdf) já impede a combinação das duas flags antes de
+	// chegar aqui, mas o núcleo se comporta de forma coerente mesmo
+	// assim, para não depender só da validação de fora.
 	Levels          []Level        // pode ser vazio => modo "somente renomear"
-	FilenameRegex   *regexp.Regexp // se nil, mantém o nome original do arquivo
+	FilenameRegex   *regexp.Regexp // se nil, o nome do arquivo é o original (ou a chave, em modo CSV)
 	Copy            bool           // true = copia (default do CLI), false = move
 	UnclassifiedDir string         // default "sem-classificacao"
 	DryRun          bool
 	Sample          int // 0 = todos; N>0 = só os N primeiros (ordem alfabética)
 	Overwrite       bool
 	Text            TextOptions // opções de extração de texto/OCR; zero-value = sem OCR
+	// CSV, quando não-nil, faz a hierarquia de pastas vir de uma planilha
+	// (ver LoadCSVMap) em vez do conteúdo do PDF: CSVKeyRegex extrai do
+	// texto do PDF a chave usada para procurar a linha correspondente em
+	// CSV, e os componentes de pasta daquela linha (já normalizados)
+	// formam o caminho de destino. Levels é ignorado neste modo.
+	CSV *CSVMap
+	// CSVKeyRegex extrai, do texto do PDF, a chave usada para procurar em
+	// CSV.Lookup. Só é usado (e deve ser não-nil) quando CSV não é nil; o
+	// grupo de captura 1 vira a chave, ou o trecho inteiro casado quando
+	// a regex não tem grupo de captura.
+	CSVKeyRegex *regexp.Regexp
 	// Recorder, quando não-nil, é chamado ao final de uma execução REAL
 	// (nunca em DryRun) que tenha efetivamente copiado ou movido pelo
 	// menos um arquivo, com action = "copy" ou "move" (espelhando Copy) e
@@ -232,6 +313,10 @@ func Organize(ctx context.Context, opts OrganizeOptions) (OrganizeResult, error)
 		return OrganizeResult{}, fmt.Errorf("diretório de entrada não informado")
 	}
 
+	if opts.CSV != nil && opts.CSVKeyRegex == nil {
+		return OrganizeResult{}, fmt.Errorf("CSVKeyRegex não pode ser nil quando CSV está definido")
+	}
+
 	dirEntries, err := os.ReadDir(opts.InputDir)
 	if err != nil {
 		return OrganizeResult{}, fmt.Errorf("ler diretório de entrada %q: %w", opts.InputDir, err)
@@ -295,6 +380,13 @@ func Organize(ctx context.Context, opts OrganizeOptions) (OrganizeResult, error)
 		text, textErr := ExtractTextOpts(ctx, srcPath, opts.Text)
 		if textErr != nil {
 			unmatched = &Unmatched{Level: "texto", Pattern: "falha ao extrair texto"}
+		} else if opts.CSV != nil {
+			relPath, um := ResolveDestinationCSV(text, *opts.CSV, opts.CSVKeyRegex, opts.FilenameRegex)
+			if um != nil {
+				unmatched = um
+			} else {
+				dest = relPath
+			}
 		} else {
 			relPath, um := ResolveDestination(text, opts.Levels, opts.FilenameRegex)
 			if um != nil {
