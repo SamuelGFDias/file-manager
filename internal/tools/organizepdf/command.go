@@ -488,11 +488,15 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 			details = append(details, fmt.Sprintf("... e mais %d", len(result.Unclassified)-maxUnclassifiedDetails))
 			break
 		}
-		level := "desconhecido"
-		if entry.Unmatched != nil {
-			level = entry.Unmatched.Level
-		}
-		details = append(details, fmt.Sprintf("%s: nível %q não encontrado", filepath.Base(entry.Source), level))
+		// pdfutil.UnmatchedReason é a mesma função usada na coluna
+		// "motivo" do relatório (--report): fonte única de tradução de
+		// Unmatched para texto legível, para que a tela e o relatório
+		// nunca divirjam na redação. Em particular, ela NÃO usa o formato
+		// "nível %q não encontrado" para Level == "destino" — "destino" é
+		// uma pseudo-etiqueta interna (colisão de destino), não um nível
+		// calibrado pelo usuário, e misturar os dois formatos confundia
+		// quem lia a mensagem.
+		details = append(details, fmt.Sprintf("%s: %s", filepath.Base(entry.Source), pdfutil.UnmatchedReason(entry.Unmatched)))
 	}
 
 	return tool.Result{Summary: summary, Details: details}, nil

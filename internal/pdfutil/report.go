@@ -58,7 +58,7 @@ func BuildReport(r OrganizeResult) []ReportRow {
 			Origem:       e.Source,
 			Destino:      e.Dest,
 			Classificado: false,
-			Motivo:       unmatchedReason(e.Unmatched),
+			Motivo:       UnmatchedReason(e.Unmatched),
 		})
 	}
 
@@ -67,16 +67,24 @@ func BuildReport(r OrganizeResult) []ReportRow {
 	return rows
 }
 
-// unmatchedReason traduz um Unmatched no motivo legível em português usado
-// na coluna "motivo" do relatório. Cobre os valores de Unmatched.Level que
+// UnmatchedReason traduz um Unmatched no motivo legível em português usado
+// tanto na coluna "motivo" do relatório (BuildReport) quanto na linha de
+// detalhe de cada arquivo não classificado mostrada na tela pelo comando
+// organize-pdf (internal/tools/organizepdf) — fonte única, para que as duas
+// jamais divirjam na redação. Cobre os valores de Unmatched.Level que
 // Organize de fato produz (ver organize.go): o rótulo de um nível
-// configurado (ex: "fornecedor"), "filename" (falha em FilenameRegex),
-// "texto" (falha ao extrair texto do PDF) e "destino" (colisão ou caminho
-// resultante inválido, cujo texto exato já vem legível em Unmatched.Pattern).
-// u == nil não deveria acontecer para uma entrada não classificada, mas é
-// tratado por segurança: uma linha "não classificado" sem motivo nenhum
-// seria pior do que um motivo genérico.
-func unmatchedReason(u *Unmatched) string {
+// configurado pelo usuário (ex: "fornecedor"), "filename" (falha em
+// FilenameRegex), "texto" (falha ao extrair texto do PDF) e "destino"
+// (colisão de destino ou caminho resultante inválido — Unmatched.Pattern já
+// vem como uma frase legível em português nesse caso, ex: "destino já
+// existe: /abs/ACME/0001.pdf" ou "caminho resultante inválido"; "destino"
+// é uma pseudo-etiqueta interna, não um nível calibrado pelo usuário, por
+// isso NÃO passa pelo formato "nível %q não encontrado" do caso default —
+// fazer isso confundiria quem lê achando que errou a calibração de um
+// nível chamado "destino"). u == nil não deveria acontecer para uma
+// entrada não classificada, mas é tratado por segurança: uma linha "não
+// classificado" sem motivo nenhum seria pior do que um motivo genérico.
+func UnmatchedReason(u *Unmatched) string {
 	if u == nil {
 		return "motivo desconhecido"
 	}
@@ -86,7 +94,7 @@ func unmatchedReason(u *Unmatched) string {
 	case "texto":
 		return "não foi possível extrair texto do arquivo"
 	case "destino":
-		return fmt.Sprintf("destino inválido: %s", u.Pattern)
+		return u.Pattern
 	default:
 		return fmt.Sprintf("nível %q não encontrado", u.Level)
 	}

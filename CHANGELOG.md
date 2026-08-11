@@ -27,7 +27,10 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - O CSV sai com **BOM UTF-8**, porque o público desta ferramenta abre o relatório no Excel em português — sem o BOM os acentos chegam corrompidos. As linhas saem sempre ordenadas por nome de arquivo, para que duas execuções do mesmo lote sejam comparáveis. Assim como o manifesto de histórico (v0.5.0), uma falha ao gravar o relatório nunca falha a organização, que já aconteceu: vira um aviso no resultado.
 - Novo arquivo `internal/pdfutil/report.go`: `BuildReport` (função pura), `WriteReportCSV` e `WriteReportJSON`. `Options.Report`/`Options.ReportFormat` são persistidos no perfil salvo, ao contrário de `dry_run`/`sample`.
 
-## [0.5.0] - 2026-08-11
+### Corrigido
+
+- **`--dry-run` podia prometer uma classificação que a execução real desmentia, em caso de colisão de destino.** Dois arquivos do mesmo lote que resolvem para o mesmo destino (nota fiscal duplicada na pasta de entrada, ou o mesmo número de nota em fornecedores diferentes — comum no dia a dia de quem organiza nota fiscal) só eram detectados como colisão na execução real, e só por acidente: como o primeiro arquivo já tinha sido gravado em disco quando o segundo chegava, um `os.Stat` pensado para detectar colisão com uma execução ANTERIOR também pegava esse caso "por tabela". A simulação, que nunca grava nada, nunca via essa colisão — o CSV de `--dry-run` mostrava os dois arquivos como classificados, enquanto a execução real reclassificava o segundo para `--unclassified-dir`. `Organize` agora detecta as duas formas de colisão (destino já reivindicado por outro arquivo do mesmo lote, e destino já existente em disco de uma execução anterior) com a mesma checagem explícita, em `--dry-run` e em execução real — as duas produzem o mesmo `Organized`/`Unclassified`, e portanto o mesmo relatório, sobre a mesma entrada.
+- A linha de detalhe de um arquivo não classificado por colisão de destino dizia `nível "destino" não encontrado` — "destino" nunca foi um nível calibrado pelo usuário, e a mensagem dava a entender erro de calibração. Agora diz `destino já existe: <caminho>`.
 
 ### Adicionado
 

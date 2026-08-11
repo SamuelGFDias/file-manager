@@ -193,6 +193,34 @@ func moveOrCopyFile(src, dst string, copy bool) error {
 	return nil
 }
 
+// destinationClaimed reporta se destAbs já está tomado, de uma das duas
+// formas que Organize precisa tratar como colisão: já foi atribuído a um
+// arquivo anterior do MESMO lote (assigned — checagem em memória, que por
+// isso funciona igualmente em dry-run e em execução real, já que dry-run
+// nunca grava nada em disco), ou já existe em disco, sobrevivente de uma
+// execução anterior. overwrite=true desliga as duas checagens: com ela
+// ligada, a intenção de quem chama é explícita — o último arquivo escrito
+// vence —, então não há colisão a reportar.
+//
+// Um erro de os.Stat que não seja "não existe" (ex: permissão negada num
+// diretório intermediário) é propagado para o chamador em vez de ser
+// tratado como "não colide": mascarar esse tipo de erro faria Organize
+// classificar um arquivo com base numa checagem que na verdade falhou.
+func destinationClaimed(destAbs string, assigned map[string]bool, overwrite bool) (bool, error) {
+	if overwrite {
+		return false, nil
+	}
+	if assigned[destAbs] {
+		return true, nil
+	}
+	if _, err := os.Stat(destAbs); err == nil {
+		return true, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	return false, nil
+}
+
 // Organize classifica e move/copia os PDFs de InputDir para OutputDir de
 // acordo com Levels e FilenameRegex.
 func Organize(ctx context.Context, opts OrganizeOptions) (OrganizeResult, error) {
@@ -237,6 +265,23 @@ func Organize(ctx context.Context, opts OrganizeOptions) (OrganizeResult, error)
 	// só roda quando !opts.DryRun (ver abaixo).
 	var recorded []RecordedEntry
 
+	// assignedDest acumula, à medida que o lote é processado, o destino
+	// (join de OutputDir + Dest) de cada arquivo já classificado — em
+	// AMBOS os modos, dry-run e execução real. Existe para que dois
+	// arquivos do lote que resolvam para o mesmo destino (nota fiscal
+	// duplicada na pasta de entrada, mesmo número de nota em fornecedores
+	// diferentes — coisas do dia a dia de quem organiza nota fiscal) sejam
+	// detectados do MESMO jeito nos dois modos. Antes desta checagem
+	// explícita, a execução real só pegava essa colisão por acidente:
+	// como o primeiro arquivo já tinha sido gravado em disco quando o
+	// segundo chegava, o os.Stat de baixo (pensado para colisão com uma
+	// execução ANTERIOR) também pegava esse caso por tabela — e a
+	// simulação, que nunca grava nada, nunca via essa colisão. Resultado:
+	// o relatório de --dry-run podia prometer uma classificação que a
+	// execução real desmentia, o que destrói o valor da própria feature
+	// de relatório (ver internal/pdfutil/report.go).
+	assignedDest := make(map[string]bool, len(files))
+
 	for _, name := range files {
 		if err := ctx.Err(); err != nil {
 			return OrganizeResult{}, err
@@ -262,8 +307,29 @@ func Organize(ctx context.Context, opts OrganizeOptions) (OrganizeResult, error)
 			}
 		}
 
+		// Colisão de destino: checada da MESMA forma em dry-run e em
+		// execução real, ANTES de qualquer gravação — nunca depois. Cobre
+		// as duas formas de colisão (ver destinationClaimed):
+		// assignedDest (outro arquivo deste mesmo lote já reivindicou
+		// este destino) e o destino já existir em disco, de uma execução
+		// anterior. --overwrite desliga as duas: com ela ligada a
+		// intenção já é explícita — o último arquivo escrito vence, sem
+		// erro.
+		if unmatched == nil {
+			destAbs := filepath.Join(opts.OutputDir, dest)
+			claimed, statErr := destinationClaimed(destAbs, assignedDest, opts.Overwrite)
+			if statErr != nil {
+				return OrganizeResult{}, fmt.Errorf("verificar destino de %q: %w", srcPath, statErr)
+			}
+			if claimed {
+				unmatched = &Unmatched{Level: "destino", Pattern: fmt.Sprintf("destino já existe: %s", destAbs)}
+			}
+		}
+
 		if unmatched != nil {
 			dest = filepath.Join(unclassifiedDir, name)
+		} else {
+			assignedDest[filepath.Join(opts.OutputDir, dest)] = true
 		}
 
 		entry := OrganizeEntry{Source: srcPath, Dest: dest, Unmatched: unmatched}
@@ -271,24 +337,15 @@ func Organize(ctx context.Context, opts OrganizeOptions) (OrganizeResult, error)
 		if !opts.DryRun {
 			destAbs := filepath.Join(opts.OutputDir, dest)
 
-			if !opts.Overwrite {
-				if _, statErr := os.Stat(destAbs); statErr == nil && unmatched == nil {
-					// Colisão no destino classificado: reclassifica em vez
-					// de abortar a execução inteira.
-					unmatched = &Unmatched{Level: "destino", Pattern: "destino já existe"}
-					dest = filepath.Join(unclassifiedDir, name)
-					entry.Dest = dest
-					entry.Unmatched = unmatched
-					destAbs = filepath.Join(opts.OutputDir, dest)
-				}
-			}
-
 			proceed := true
 			if !opts.Overwrite {
 				if _, statErr := os.Stat(destAbs); statErr == nil {
-					// Colisão persiste mesmo após reclassificar (ex: dentro
-					// de sem-classificacao). Mantém o registro, mas não
-					// sobrescreve o arquivo existente.
+					// Colisão persiste mesmo dentro de --unclassified-dir
+					// (ex: já havia um arquivo de mesmo nome lá, de uma
+					// execução anterior). Isto só decide se a GRAVAÇÃO
+					// acontece — não muda a classificação nem o relatório
+					// —, então não precisa (nem faz sentido) rodar em
+					// dry-run, que nunca grava nada.
 					proceed = false
 				}
 			}

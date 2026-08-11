@@ -91,15 +91,16 @@ func TestUnmatchedReasonMessages(t *testing.T) {
 		{"nível nomeado", &Unmatched{Level: "fornecedor", Pattern: `X`}, `nível "fornecedor" não encontrado`},
 		{"filename", &Unmatched{Level: "filename", Pattern: `X`}, "nome do arquivo não encontrado"},
 		{"texto", &Unmatched{Level: "texto", Pattern: "falha ao extrair texto"}, "não foi possível extrair texto do arquivo"},
-		{"destino já existe", &Unmatched{Level: "destino", Pattern: "destino já existe"}, "destino inválido: destino já existe"},
+		{"destino já existe", &Unmatched{Level: "destino", Pattern: "destino já existe: /abs/ACME/0001.pdf"}, "destino já existe: /abs/ACME/0001.pdf"},
+		{"destino caminho inválido", &Unmatched{Level: "destino", Pattern: "caminho resultante inválido"}, "caminho resultante inválido"},
 		{"nil", nil, "motivo desconhecido"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := unmatchedReason(tt.u)
+			got := UnmatchedReason(tt.u)
 			if got != tt.want {
-				t.Errorf("unmatchedReason(%+v) = %q, want %q", tt.u, got, tt.want)
+				t.Errorf("UnmatchedReason(%+v) = %q, want %q", tt.u, got, tt.want)
 			}
 		})
 	}

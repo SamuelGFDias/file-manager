@@ -137,7 +137,7 @@ file-manager organize-pdf --input ./notas --output ./organizado \
 
 `--report <caminho>` grava um arquivo com **uma linha por arquivo considerado**, classificado ou não, com estas colunas: `arquivo, origem, destino, classificado, motivo`. Para um arquivo não classificado, `destino` fica vazio e `motivo` explica o porquê (ex.: `nível "fornecedor" não encontrado`, `nome do arquivo não encontrado`). `--report-format` escolhe entre `csv` (default, para abrir numa planilha) e `json` (para quem for processar o relatório por programa).
 
-**Funciona junto com `--dry-run`** — e é justamente aí que ele mais serve: gera o relatório completo, com a classificação de cada arquivo, sem copiar ou mover nada, para conferir numa planilha antes de aplicar de verdade.
+**Funciona junto com `--dry-run`** — e é justamente aí que ele mais serve: gera o relatório completo, com a classificação de cada arquivo, sem copiar ou mover nada, para conferir numa planilha antes de aplicar de verdade. A simulação inclusive detecta colisão de destino (dois arquivos do lote resolvendo para o mesmo caminho, ou um destino que já existe de uma execução anterior) exatamente como a execução real detectaria — rodar com `--dry-run` e sem, sobre a mesma entrada, produz o mesmo relatório.
 
 ```bash
 file-manager organize-pdf --input ./notas --output ./organizado \

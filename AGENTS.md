@@ -235,6 +235,17 @@ O resultado de `organize-pdf` aparecia só resumido na tela (`OrganizeResult.Sum
 
 `Report`/`ReportFormat` (em `Options`) são, ao contrário de `DryRun`/`Sample`, persistidos no perfil salvo (`yaml:"report"`, `yaml:"report_format"`) — é razoável querer sempre gerar o relatório no mesmo caminho toda vez que um perfil calibrado é aplicado.
 
+**Colisão de destino detectada por igual em `--dry-run` e em execução real (`destinationClaimed`, `organize.go`) — corrigido em revisão de PR, não escapar de novo.** Até então, a checagem de colisão só existia dentro do bloco `!opts.DryRun`, e mesmo ali era incidental: um `os.Stat(destAbs)` pensado para pegar colisão com uma execução ANTERIOR também pegava, por acaso, colisão DENTRO do próprio lote — porque o primeiro arquivo já tinha sido fisicamente gravado quando o segundo chegava a verificar o mesmo caminho. Em `--dry-run`, como nada é gravado, esse `os.Stat` nunca via nada: dois arquivos resolvendo para o mesmo destino apareciam os dois como classificados na simulação, e a execução real reclassificava o segundo — exatamente o tipo de divergência que a feature de relatório (`--report`) promete não ter. `destinationClaimed(destAbs, assigned, overwrite)` unifica as duas formas de colisão atrás de uma única checagem, chamada da MESMA forma nos dois modos, ANTES de qualquer gravação:
+
+1. **Colisão dentro do lote:** `assignedDest` (mapa em memória, populado à medida que o loop de `Organize` processa os arquivos) registra o destino de cada arquivo já classificado. Funciona igual em `--dry-run` e execução real, porque não depende de nada estar em disco.
+2. **Destino já em disco:** `os.Stat(destAbs)`, sobrevivente de uma execução anterior (ou de fora deste processo). Agora chamado também em `--dry-run`, não só na execução real.
+
+`--overwrite` desliga as duas checagens de uma vez (a intenção de sobrescrever já é explícita — não há colisão a reportar). Um arquivo colidido é reclassificado com `Unmatched{Level: "destino", Pattern: "destino já existe: <caminho>"}` — o `Pattern` já vem pronto para exibição, sem prefixo extra.
+
+**Critério de regressão:** rodar `Organize` duas vezes sobre a MESMA `InputDir` (uma com `DryRun: true`, outra sem), com o MESMO `OutputDir`, precisa produzir `Organized`/`Unclassified` idênticos campo a campo (só o campo `DryRun` do `OrganizeResult` pode diferir) — não só a mesma contagem. Ver `TestOrganizeDryRunMatchesRealRunOnSameBatchCollision` em `internal/pdfutil/organize_test.go`.
+
+**`pdfutil.UnmatchedReason(*Unmatched) string` (report.go) é a fonte única de tradução de `Unmatched` para texto legível em português**, usada tanto na coluna `motivo` do relatório (`BuildReport`) quanto na linha de detalhe de arquivo não classificado que `organize-pdf` imprime na tela (`internal/tools/organizepdf/command.go`, `runWith`). Antes da unificação, a tela tinha sua própria formatação (`nível %q não encontrado` aplicado a QUALQUER `Unmatched.Level`, inclusive a pseudo-etiqueta interna `"destino"`) — o que produzia a mensagem confusa `nível "destino" não encontrado` para uma colisão de destino, dando a entender (incorretamente) que o usuário tinha calibrado mal um nível chamado "destino". `UnmatchedReason` trata `"destino"` como caso especial (devolve `Unmatched.Pattern` direto, sem o formato "nível ... não encontrado"), junto com `"filename"` e `"texto"` — só o `default` (rótulo de nível de fato calibrado pelo usuário) usa o formato `nível %q não encontrado`.
+
 ## Fluxo para Adicionar Uma Ferramenta Nova
 
 ### Passo 1: Gerar esqueleto
