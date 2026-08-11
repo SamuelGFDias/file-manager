@@ -6,6 +6,8 @@ package profiles
 
 import (
 	"errors"
+	"fmt"
+	"path/filepath"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/AlecAivazis/survey/v2/terminal"
@@ -22,6 +24,8 @@ const (
 	actionDup    = "Duplicar"
 	actionDelete = "Excluir"
 	actionApply  = "Aplicar agora"
+	actionExport = "Exportar para arquivo"
+	actionImport = "Importar de arquivo"
 	actionBack   = "Voltar"
 	maxNameTries = 3
 )
@@ -114,6 +118,8 @@ func (s *screen) runActionsMenu(nav *ui.Navigator, t tool.Tool) {
 		actionDup,
 		actionDelete,
 		actionApply,
+		actionExport,
+		actionImport,
 		actionBack,
 	}
 
@@ -149,6 +155,10 @@ func (s *screen) runActionsMenu(nav *ui.Navigator, t tool.Tool) {
 			s.doDelete(t)
 		case actionApply:
 			s.doApply(t)
+		case actionExport:
+			s.doExport(t)
+		case actionImport:
+			s.doImport(t)
 		}
 	}
 }
@@ -384,6 +394,150 @@ func (s *screen) doApply(t tool.Tool) {
 	for _, detail := range result.Details {
 		ui.Infof("%s", detail)
 	}
+}
+
+// doExport escolhe um perfil existente e grava seu envelope completo num
+// arquivo externo, para que possa ser enviado a outra pessoa (ex: quem
+// calibra as regras numa máquina e envia o perfil pronto para quem vai
+// usá-lo no dia a dia noutra).
+func (s *screen) doExport(t tool.Tool) {
+	toolID := t.Meta().ID
+
+	name, ok := s.pickExistingProfile(t, "Escolha o perfil para exportar:")
+	if !ok {
+		return
+	}
+
+	output := "./" + name + ".yaml"
+	promptErr := survey.AskOne(&survey.Input{
+		Message: "Caminho do arquivo de saída:",
+		Default: output,
+	}, &output)
+	if promptErr != nil {
+		if !isInterrupt(promptErr) {
+			ui.Errorf("erro ao ler caminho de saída: %v", promptErr)
+			ui.Pause()
+		}
+		return
+	}
+
+	if err := config.ExportProfile(toolID, name, output); err != nil {
+		ui.Errorf("erro ao exportar perfil: %v", err)
+		ui.Pause()
+		return
+	}
+
+	abs, absErr := filepath.Abs(output)
+	if absErr != nil {
+		abs = output
+	}
+
+	ui.Successf("Perfil %q exportado para %s", name, ui.PathText(abs))
+}
+
+// doImport lê um perfil de um arquivo externo (recebido de quem calibrou as
+// regras numa outra máquina), mostra qual ferramenta e qual nome vieram no
+// arquivo, deixa o usuário manter o nome ou escolher outro, confirma antes
+// de sobrescrever um perfil existente, e valida o conteúdo contra as
+// Options da ferramenta antes de gravar — um arquivo corrompido ou de
+// versão incompatível é rejeitado aqui, não na hora de usar o perfil.
+func (s *screen) doImport(t tool.Tool) {
+	file := ""
+	promptErr := survey.AskOne(&survey.Input{
+		Message: "Caminho do arquivo de perfil a importar:",
+	}, &file)
+	if promptErr != nil {
+		if !isInterrupt(promptErr) {
+			ui.Errorf("erro ao ler caminho do arquivo: %v", promptErr)
+			ui.Pause()
+		}
+		return
+	}
+
+	imported, err := config.ReadProfileFile(file)
+	if err != nil {
+		ui.Errorf("erro ao ler arquivo de perfil: %v", err)
+		ui.Pause()
+		return
+	}
+
+	if imported.Tool != t.Meta().ID {
+		ui.Errorf(
+			"o arquivo %q é de um perfil da ferramenta %q, mas você está na tela de %q.",
+			file, imported.Tool, t.Meta().Title,
+		)
+		ui.Pause()
+		return
+	}
+
+	ui.Infof("Arquivo contém o perfil %q da ferramenta %q.", imported.Name, imported.Tool)
+
+	target := imported.Name
+	keep := true
+	promptErr = survey.AskOne(&survey.Confirm{
+		Message: fmt.Sprintf("Manter o nome %q para o perfil importado?", imported.Name),
+		Default: true,
+	}, &keep)
+	if promptErr != nil {
+		if !isInterrupt(promptErr) {
+			ui.Errorf("erro ao ler confirmação: %v", promptErr)
+			ui.Pause()
+		}
+		return
+	}
+
+	if !keep {
+		newName, ok := askNewProfileName()
+		if !ok {
+			return
+		}
+		target = newName
+	}
+
+	toolID := t.Meta().ID
+	exists, err := config.Exists(toolID, target)
+	if err != nil {
+		ui.Errorf("erro ao verificar perfil existente: %v", err)
+		ui.Pause()
+		return
+	}
+
+	force := false
+	if exists {
+		promptErr = survey.AskOne(&survey.Confirm{
+			Message: "Já existe um perfil chamado \"" + target + "\". Sobrescrever?",
+			Default: false,
+		}, &force)
+		if promptErr != nil {
+			if !isInterrupt(promptErr) {
+				ui.Errorf("erro ao ler confirmação: %v", promptErr)
+				ui.Pause()
+			}
+			return
+		}
+		if !force {
+			return
+		}
+	}
+
+	empty := t.Profile().Empty()
+	if err := imported.Node.Decode(empty); err != nil {
+		ui.Errorf(
+			"o conteúdo do arquivo não é compatível com as opções de %q (arquivo corrompido ou de "+
+				"versão incompatível): %v",
+			t.Meta().Title, err,
+		)
+		ui.Pause()
+		return
+	}
+
+	if err := config.ImportProfile(imported, target, force); err != nil {
+		ui.Errorf("erro ao importar perfil: %v", err)
+		ui.Pause()
+		return
+	}
+
+	ui.Successf("Perfil %q importado com sucesso.", target)
 }
 
 // pickExistingProfile lista os perfis existentes e pede que o usuário

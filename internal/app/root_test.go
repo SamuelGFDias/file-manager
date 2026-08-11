@@ -133,6 +133,121 @@ func TestUpdateCommandFlags(t *testing.T) {
 	}
 }
 
+func TestProfilesCommandHasSubcommands(t *testing.T) {
+	cmd := NewRootCommand(Version{Version: "0.1.0", Commit: "abc1234", Date: "2026-08-11T12:00:00Z"})
+
+	var profilesCmd *cobra.Command
+	for _, c := range cmd.Commands() {
+		if c.Name() == "profiles" {
+			profilesCmd = c
+			break
+		}
+	}
+	if profilesCmd == nil {
+		t.Fatalf("subcomando \"profiles\" não encontrado")
+	}
+
+	names := make(map[string]bool)
+	for _, c := range profilesCmd.Commands() {
+		names[c.Name()] = true
+	}
+
+	wantNames := []string{"list", "export", "import", "path"}
+	for _, want := range wantNames {
+		if !names[want] {
+			t.Errorf("subcomando \"profiles %s\" não encontrado; presentes: %v", want, names)
+		}
+	}
+}
+
+func TestProfilesListCommandFlags(t *testing.T) {
+	cmd := NewRootCommand(Version{Version: "0.1.0", Commit: "abc1234", Date: "2026-08-11T12:00:00Z"})
+
+	listCmd := findSubcommand(t, cmd, "profiles", "list")
+	if listCmd.Flags().Lookup("tool") == nil {
+		t.Errorf("subcomando profiles list não tem a flag --tool")
+	}
+}
+
+func TestProfilesExportCommandFlags(t *testing.T) {
+	cmd := NewRootCommand(Version{Version: "0.1.0", Commit: "abc1234", Date: "2026-08-11T12:00:00Z"})
+
+	exportCmd := findSubcommand(t, cmd, "profiles", "export")
+
+	for _, name := range []string{"tool", "name", "output"} {
+		flag := exportCmd.Flags().Lookup(name)
+		if flag == nil {
+			t.Errorf("subcomando profiles export não tem a flag --%s", name)
+			continue
+		}
+	}
+
+	for _, name := range []string{"tool", "name", "output"} {
+		if !isRequiredFlag(exportCmd, name) {
+			t.Errorf("flag --%s de profiles export deveria ser obrigatória", name)
+		}
+	}
+}
+
+func TestProfilesImportCommandFlags(t *testing.T) {
+	cmd := NewRootCommand(Version{Version: "0.1.0", Commit: "abc1234", Date: "2026-08-11T12:00:00Z"})
+
+	importCmd := findSubcommand(t, cmd, "profiles", "import")
+
+	if importCmd.Flags().Lookup("file") == nil {
+		t.Errorf("subcomando profiles import não tem a flag --file")
+	}
+	if importCmd.Flags().Lookup("name") == nil {
+		t.Errorf("subcomando profiles import não tem a flag --name")
+	}
+	if importCmd.Flags().Lookup("force") == nil {
+		t.Errorf("subcomando profiles import não tem a flag --force")
+	}
+
+	if !isRequiredFlag(importCmd, "file") {
+		t.Errorf("flag --file de profiles import deveria ser obrigatória")
+	}
+}
+
+func TestProfilesPathCommandExists(t *testing.T) {
+	cmd := NewRootCommand(Version{Version: "0.1.0", Commit: "abc1234", Date: "2026-08-11T12:00:00Z"})
+
+	_ = findSubcommand(t, cmd, "profiles", "path")
+}
+
+// findSubcommand navega de root até o subcomando identificado pela cadeia
+// de nomes em path, falhando o teste se algum elo não existir.
+func findSubcommand(t *testing.T, root *cobra.Command, path ...string) *cobra.Command {
+	t.Helper()
+
+	current := root
+	for _, name := range path {
+		var next *cobra.Command
+		for _, c := range current.Commands() {
+			if c.Name() == name {
+				next = c
+				break
+			}
+		}
+		if next == nil {
+			t.Fatalf("subcomando %q não encontrado em %q", name, current.Name())
+		}
+		current = next
+	}
+	return current
+}
+
+// isRequiredFlag verifica se uma flag foi marcada como obrigatória via
+// cmd.MarkFlagRequired, olhando a annotation que o cobra usa internamente.
+func isRequiredFlag(cmd *cobra.Command, name string) bool {
+	flag := cmd.Flags().Lookup(name)
+	if flag == nil {
+		return false
+	}
+	annotations, ok := flag.Annotations[cobra.BashCompOneRequiredFlag]
+	return ok && len(annotations) > 0 && annotations[0] == "true"
+}
+
 func TestRootCommandHelp(t *testing.T) {
 	cmd := NewRootCommand(Version{Version: "0.1.0", Commit: "abc1234", Date: "2026-08-11T12:00:00Z"})
 	cmd.SetArgs([]string{"--help"})

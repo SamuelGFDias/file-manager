@@ -164,6 +164,33 @@ file-manager merge-pdf --profile meu-perfil
 
 Se houver flags adicionais na linha de comando, elas sobrescrevem os valores do perfil.
 
+### Exportar e importar um perfil
+
+Quem calibra as regras de um perfil (ex: as expressões regulares de `organize-pdf`) e quem usa a ferramenta no dia a dia costumam ser pessoas diferentes, em máquinas diferentes — normalmente quem calibra é o dono do projeto, e quem usa é alguém sem familiaridade com regex. O fluxo é: calibrar uma vez numa máquina, exportar o perfil para um arquivo, enviar esse arquivo para a outra pessoa (e-mail, chat, o que for) e ela importar na própria máquina.
+
+```bash
+# Na máquina de quem calibrou:
+file-manager profiles export --tool organize-pdf --name notas-fiscais --output notas-fiscais.yaml
+
+# Depois de enviar notas-fiscais.yaml para a outra pessoa, na máquina dela:
+file-manager profiles import --file notas-fiscais.yaml
+
+# Para importar sob outro nome, ou por cima de um perfil já existente:
+file-manager profiles import --file notas-fiscais.yaml --name notas-fiscais-2026 --force
+```
+
+O arquivo exportado é exatamente o mesmo envelope YAML usado internamente (`name`, `tool`, `created_at`, `updated_at`, `data`) — não existe um formato paralelo de exportação para manter sincronizado. Na importação, o `tool` declarado no arquivo precisa existir neste CLI e suportar perfis, e o conteúdo de `data` é validado contra as opções dessa ferramenta: um arquivo corrompido, editado à mão de forma inconsistente, ou exportado por uma versão incompatível do `file-manager`, falha na importação — não no meio de um lote de arquivos processado com um perfil ruim.
+
+Outros comandos úteis:
+
+```bash
+file-manager profiles list                        # lista os perfis de todas as ferramentas
+file-manager profiles list --tool organize-pdf     # lista só os perfis de uma ferramenta
+file-manager profiles path                         # mostra o diretório onde os perfis ficam guardados
+```
+
+O mesmo fluxo (exportar/importar) também está disponível na tela interativa de perfis, como as opções "Exportar para arquivo" e "Importar de arquivo" no menu de ações de cada ferramenta.
+
 ## Documentação para IA
 
 A ferramenta pode exportar sua própria documentação em dois formatos para uso em chatbots de IA:

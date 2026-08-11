@@ -193,3 +193,142 @@ func Delete(toolID, name string) error {
 
 	return nil
 }
+
+// ExportProfile grava o perfil identificado por toolID/name num arquivo
+// externo em destPath, preservando exatamente o mesmo envelope usado
+// internamente (name, tool, created_at, updated_at, data). Isso torna
+// ExportProfile e ImportProfile simétricos: o arquivo exportado é lido de
+// volta por ReadProfileFile sem nenhuma tradução de formato. Cria o
+// diretório de destino se ele ainda não existir.
+func ExportProfile(toolID, name, destPath string) error {
+	profile, err := LoadProfile(toolID, name)
+	if err != nil {
+		return err
+	}
+
+	out, err := yaml.Marshal(profile)
+	if err != nil {
+		return fmt.Errorf("erro ao codificar perfil %q: %w", name, err)
+	}
+
+	if dir := filepath.Dir(destPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("erro ao criar diretório de destino %q: %w", dir, err)
+		}
+	}
+
+	if err := os.WriteFile(destPath, out, 0o644); err != nil {
+		return fmt.Errorf("erro ao gravar arquivo de exportação %q: %w", destPath, err)
+	}
+
+	return nil
+}
+
+// ImportedProfile descreve o que foi lido de um arquivo de perfil externo:
+// o nome e a ferramenta declarados no arquivo, e o conteúdo de "data" ainda
+// não decodificado (quem chama ReadProfileFile decide contra qual struct de
+// Options decodificar, já que só o registro de ferramentas conhece isso).
+type ImportedProfile struct {
+	Name string
+	Tool string
+	Node yaml.Node
+}
+
+// ReadProfileFile lê e valida a estrutura de um arquivo de perfil externo:
+// o arquivo precisa existir e ser um YAML de perfil válido, com os campos
+// "tool" e "name" preenchidos e "name" aprovado por ValidateName. As
+// mensagens de erro nomeiam o campo problemático, pensadas para quem recebe
+// o arquivo por e-mail ou mensagem e precisa entender o que veio errado sem
+// olhar o código.
+func ReadProfileFile(path string) (ImportedProfile, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ImportedProfile{}, fmt.Errorf("arquivo de perfil %q não encontrado: %w", path, err)
+		}
+		return ImportedProfile{}, fmt.Errorf("erro ao ler arquivo de perfil %q: %w", path, err)
+	}
+
+	var profile Profile
+	if err := yaml.Unmarshal(raw, &profile); err != nil {
+		return ImportedProfile{}, fmt.Errorf("arquivo %q não é um YAML de perfil válido: %w", path, err)
+	}
+
+	if strings.TrimSpace(profile.Tool) == "" {
+		return ImportedProfile{}, fmt.Errorf("arquivo %q inválido: campo \"tool\" está vazio", path)
+	}
+
+	if strings.TrimSpace(profile.Name) == "" {
+		return ImportedProfile{}, fmt.Errorf("arquivo %q inválido: campo \"name\" está vazio", path)
+	}
+
+	if err := ValidateName(profile.Name); err != nil {
+		return ImportedProfile{}, fmt.Errorf("arquivo %q inválido: campo \"name\" (%q) é inválido: %w", path, profile.Name, err)
+	}
+
+	return ImportedProfile{
+		Name: profile.Name,
+		Tool: profile.Tool,
+		Node: profile.Data,
+	}, nil
+}
+
+// ImportProfile grava um perfil lido de arquivo (via ReadProfileFile) no
+// diretório de configuração, sob o nome de destino informado (que pode ser
+// diferente do nome original do arquivo). Valida o nome de destino com
+// ValidateName. Se já existir um perfil com esse nome para p.Tool,
+// overwrite=false devolve erro sem gravar nada; overwrite=true sobrescreve
+// e preserva o created_at do perfil existente.
+func ImportProfile(p ImportedProfile, name string, overwrite bool) error {
+	if err := ValidateName(name); err != nil {
+		return err
+	}
+
+	path, err := ProfilePath(p.Tool, name)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	createdAt := now
+
+	existing, err := LoadProfile(p.Tool, name)
+	switch {
+	case err == nil:
+		if !overwrite {
+			return fmt.Errorf(
+				"já existe um perfil chamado %q para a ferramenta %q; use a opção de sobrescrever para importar mesmo assim",
+				name, p.Tool,
+			)
+		}
+		createdAt = existing.CreatedAt
+	case errors.Is(err, os.ErrNotExist):
+		// Perfil ainda não existe: segue com createdAt = now, definido acima.
+	default:
+		return err
+	}
+
+	profile := Profile{
+		Name:      name,
+		Tool:      p.Tool,
+		CreatedAt: createdAt,
+		UpdatedAt: now,
+		Data:      p.Node,
+	}
+
+	out, err := yaml.Marshal(&profile)
+	if err != nil {
+		return fmt.Errorf("erro ao codificar perfil %q: %w", name, err)
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		return err
+	}
+
+	return nil
+}

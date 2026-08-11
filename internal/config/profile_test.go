@@ -3,8 +3,12 @@ package config
 import (
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // withTempConfigDir substitui userConfigDir por um diretório temporário
@@ -251,4 +255,208 @@ func TestLoadWithMaliciousNameFailsValidation(t *testing.T) {
 	if errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("erro deveria ser de validação, não de arquivo inexistente: %v", err)
 	}
+}
+
+func TestExportProfileThenReadProfileFileRoundTrip(t *testing.T) {
+	withTempConfigDir(t)
+
+	in := sampleData{Label: "exportado", Count: 7, Tags: []string{"x", "y"}}
+	if err := Save(testTool, "para-exportar", in); err != nil {
+		t.Fatalf("Save falhou: %v", err)
+	}
+
+	dest := filepath.Join(t.TempDir(), "subpasta", "perfil.yaml")
+	if err := ExportProfile(testTool, "para-exportar", dest); err != nil {
+		t.Fatalf("ExportProfile falhou: %v", err)
+	}
+
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("arquivo exportado não encontrado em %q: %v", dest, err)
+	}
+
+	imported, err := ReadProfileFile(dest)
+	if err != nil {
+		t.Fatalf("ReadProfileFile falhou: %v", err)
+	}
+
+	if imported.Tool != testTool {
+		t.Errorf("Tool = %q, esperava %q", imported.Tool, testTool)
+	}
+	if imported.Name != "para-exportar" {
+		t.Errorf("Name = %q, esperava %q", imported.Name, "para-exportar")
+	}
+
+	var out sampleData
+	if err := imported.Node.Decode(&out); err != nil {
+		t.Fatalf("erro ao decodificar Node: %v", err)
+	}
+	if out.Label != in.Label || out.Count != in.Count || len(out.Tags) != len(in.Tags) {
+		t.Fatalf("round-trip incorreto: got %+v, want %+v", out, in)
+	}
+}
+
+func TestReadProfileFileNonExistent(t *testing.T) {
+	_, err := ReadProfileFile(filepath.Join(t.TempDir(), "nao-existe.yaml"))
+	if err == nil {
+		t.Fatalf("esperava erro para arquivo inexistente")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("esperava errors.Is(err, os.ErrNotExist), got %v", err)
+	}
+}
+
+func TestReadProfileFileInvalidYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalido.yaml")
+	if err := os.WriteFile(path, []byte("isto: [não fecha"), 0o644); err != nil {
+		t.Fatalf("falha ao preparar arquivo de teste: %v", err)
+	}
+
+	_, err := ReadProfileFile(path)
+	if err == nil {
+		t.Fatalf("esperava erro para YAML inválido")
+	}
+}
+
+func TestReadProfileFileEmptyTool(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sem-tool.yaml")
+	content := "name: algum-nome\ntool: \"\"\ndata:\n  label: x\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("falha ao preparar arquivo de teste: %v", err)
+	}
+
+	_, err := ReadProfileFile(path)
+	if err == nil {
+		t.Fatalf("esperava erro para campo \"tool\" vazio")
+	}
+	if !strings.Contains(err.Error(), "tool") {
+		t.Errorf("erro deveria mencionar o campo \"tool\": %v", err)
+	}
+}
+
+func TestReadProfileFileInvalidName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nome-invalido.yaml")
+	content := "name: ../x\ntool: example-tool\ndata:\n  label: x\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("falha ao preparar arquivo de teste: %v", err)
+	}
+
+	_, err := ReadProfileFile(path)
+	if err == nil {
+		t.Fatalf("esperava erro para campo \"name\" inválido")
+	}
+	if !strings.Contains(err.Error(), "name") {
+		t.Errorf("erro deveria mencionar o campo \"name\": %v", err)
+	}
+}
+
+func TestImportProfileFailsWhenExistsAndNotOverwrite(t *testing.T) {
+	withTempConfigDir(t)
+
+	if err := Save(testTool, "ja-existe", sampleData{Label: "original"}); err != nil {
+		t.Fatalf("Save falhou: %v", err)
+	}
+
+	imported := ImportedProfile{
+		Name: "ja-existe",
+		Tool: testTool,
+		Node: encodeNode(t, sampleData{Label: "novo"}),
+	}
+
+	err := ImportProfile(imported, "ja-existe", false)
+	if err == nil {
+		t.Fatalf("esperava erro ao importar sobre perfil existente sem overwrite")
+	}
+
+	var out sampleData
+	if err := Load(testTool, "ja-existe", &out); err != nil {
+		t.Fatalf("Load falhou: %v", err)
+	}
+	if out.Label != "original" {
+		t.Fatalf("perfil original não deveria ter sido sobrescrito: got %+v", out)
+	}
+}
+
+func TestImportProfileOverwritesAndPreservesCreatedAt(t *testing.T) {
+	withTempConfigDir(t)
+
+	if err := Save(testTool, "sobrescrever", sampleData{Label: "original"}); err != nil {
+		t.Fatalf("Save falhou: %v", err)
+	}
+	original, err := LoadProfile(testTool, "sobrescrever")
+	if err != nil {
+		t.Fatalf("LoadProfile falhou: %v", err)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	imported := ImportedProfile{
+		Name: "sobrescrever",
+		Tool: testTool,
+		Node: encodeNode(t, sampleData{Label: "importado"}),
+	}
+
+	if err := ImportProfile(imported, "sobrescrever", true); err != nil {
+		t.Fatalf("ImportProfile falhou: %v", err)
+	}
+
+	var out sampleData
+	if err := Load(testTool, "sobrescrever", &out); err != nil {
+		t.Fatalf("Load falhou: %v", err)
+	}
+	if out.Label != "importado" {
+		t.Fatalf("esperava dados importados, got %+v", out)
+	}
+
+	after, err := LoadProfile(testTool, "sobrescrever")
+	if err != nil {
+		t.Fatalf("LoadProfile falhou: %v", err)
+	}
+	if !after.CreatedAt.Equal(original.CreatedAt) {
+		t.Fatalf("CreatedAt deveria ser preservado: original %v, got %v", original.CreatedAt, after.CreatedAt)
+	}
+	if !after.UpdatedAt.After(original.UpdatedAt) {
+		t.Fatalf("UpdatedAt deveria avançar: original %v, got %v", original.UpdatedAt, after.UpdatedAt)
+	}
+}
+
+func TestImportProfileWithDifferentNameWritesUnderNewName(t *testing.T) {
+	withTempConfigDir(t)
+
+	imported := ImportedProfile{
+		Name: "nome-do-arquivo",
+		Tool: testTool,
+		Node: encodeNode(t, sampleData{Label: "conteudo"}),
+	}
+
+	if err := ImportProfile(imported, "nome-novo", false); err != nil {
+		t.Fatalf("ImportProfile falhou: %v", err)
+	}
+
+	existsOld, err := Exists(testTool, "nome-do-arquivo")
+	if err != nil {
+		t.Fatalf("Exists falhou: %v", err)
+	}
+	if existsOld {
+		t.Fatalf("perfil não deveria ter sido gravado sob o nome original do arquivo")
+	}
+
+	existsNew, err := Exists(testTool, "nome-novo")
+	if err != nil {
+		t.Fatalf("Exists falhou: %v", err)
+	}
+	if !existsNew {
+		t.Fatalf("perfil deveria ter sido gravado sob o novo nome")
+	}
+}
+
+// encodeNode codifica v num yaml.Node, para montar ImportedProfile.Node nos
+// testes sem depender de um arquivo real em disco.
+func encodeNode(t *testing.T, v any) yaml.Node {
+	t.Helper()
+
+	var node yaml.Node
+	if err := node.Encode(v); err != nil {
+		t.Fatalf("erro ao codificar yaml.Node: %v", err)
+	}
+	return node
 }
