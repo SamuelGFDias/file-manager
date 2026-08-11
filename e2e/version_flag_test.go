@@ -5,6 +5,7 @@ package e2e
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SamuelGFDias/file-manager/internal/app"
 )
@@ -54,5 +55,44 @@ func TestHelpListsVersionFlagInPortuguese(t *testing.T) {
 	}
 	if !strings.Contains(out, "mostra a versão do binário") {
 		t.Errorf("saída de --help não contém a descrição em português da flag --version:\n%s", out)
+	}
+}
+
+// TestVersionFlagRedirectedProducesOnlyVersionLine é a prova de ponta a
+// ponta (binário real, não uma chamada direta a cobra.Command.Execute())
+// das duas armadilhas que o aviso de atualização disponível precisa
+// resolver ao ser acrescentado a "--version"/"version" (ver AGENTS.md,
+// Decisão 12): instantâneo e sem rede quando a saída não é um terminal.
+// runCLI (undo_test.go) usa exec.Command comum — sem pty — então
+// cmd.Stdout é um os.Pipe comum, não um tty: exatamente o que acontece com
+// "file-manager --version > arquivo" ou "file-manager --version | cat".
+// Sem terminal, printVersion (internal/app/root.go) nunca constrói um
+// selfupdate.Checker, então não há requisição de rede — o binário deste
+// teste roda numa suíte que pode não ter internet, e mesmo assim o teste
+// passa rápido e determinístico.
+func TestVersionFlagRedirectedProducesOnlyVersionLine(t *testing.T) {
+	dir := t.TempDir()
+
+	start := time.Now()
+	stdout, stderr := runCLI(t, dir, []string{"--version"})
+	elapsed := time.Since(start)
+
+	want := app.Version{Version: "dev", Commit: "none", Date: "unknown"}.String() + "\n"
+	if stdout != want {
+		t.Errorf("stdout = %q, esperava exatamente %q (só a linha da versão, sem aviso)", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, esperava vazio — sem terminal não pode haver aviso de atualização", stderr)
+	}
+
+	// 2s é uma folga larga sobre o teto de 1s que printVersion respeita
+	// (versionNoticeTimeout, em internal/app/root.go): o caminho
+	// não-terminal nem chega a criar o Checker, então o tempo real
+	// esperado é o de iniciar e encerrar o processo, não o de qualquer
+	// espera de rede. Um valor alto o bastante evita flakiness em CI
+	// carregado, mas ainda pega uma regressão que reintroduza uma consulta
+	// síncrona no caminho redirecionado.
+	if elapsed > 2*time.Second {
+		t.Errorf("\"--version\" redirecionado levou %s, esperava resposta praticamente imediata (sem consulta de rede)", elapsed)
 	}
 }

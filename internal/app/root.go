@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/spf13/cobra"
@@ -58,6 +59,24 @@ func NewRootCommand(v Version) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// A flag "--version"/"-v" é tratada AQUI, dentro do RunE, em vez
+			// de deixar o mecanismo embutido do cobra (root.Version não-vazio
+			// + Command.execute) interceptá-la antes de qualquer RunE rodar.
+			// Motivo: o aviso de atualização disponível (Decisão 12 do
+			// AGENTS.md) precisa ser impresso DEPOIS da linha de versão, e o
+			// atalho embutido do cobra devolve o controle ao chamador assim
+			// que imprime — não há como emendar código depois dele. Por
+			// isso root.Version fica deliberadamente vazio (abaixo) e esta
+			// flag, registrada manualmente antes deste bloco, é lida à mão.
+			versionRequested, err := cmd.Flags().GetBool("version")
+			if err != nil {
+				return err
+			}
+			if versionRequested {
+				printVersion(v, ui.IsOutputTerminal(), selfupdate.NewChecker)
+				return nil
+			}
+
 			if !ui.IsInteractive() {
 				return fmt.Errorf(
 					"nenhum terminal interativo disponível; rode um subcomando específico " +
@@ -70,38 +89,31 @@ func NewRootCommand(v Version) *cobra.Command {
 		},
 	}
 
+	// root.Version é deliberadamente deixado vazio (zero value ""). Um
 	// root.Version não-vazio é o gatilho que o cobra usa (em
 	// Command.execute, chamado por root.Execute()) para tratar "--version"
-	// como um pedido de saída antecipada, antes de rodar RunE — exatamente
-	// o mesmo mecanismo que já intercepta "--help". Sem isso, "--version"
-	// seria só mais um argumento desconhecido.
-	root.Version = v.String()
+	// como pedido de saída antecipada ANTES de RunE rodar — o mesmo
+	// mecanismo que intercepta "--help". Isso bastava até esta versão, mas
+	// deixou de servir quando "--version" passou a também emitir (condicional
+	// a IsOutputTerminal(), depois da linha de versão) o aviso de atualização
+	// disponível: esse código só pode viver dentro do RunE do root, que o
+	// atalho embutido do cobra nunca alcança. Por isso o tratamento de
+	// "--version" foi movido para dentro do RunE acima (ver printVersion) e
+	// root.Version fica vazio para que Command.execute pule o atalho antigo
+	// e chegue até o RunE normalmente. root.SetVersionTemplate também deixou
+	// de ser necessário pelo mesmo motivo — quem formata a saída agora é
+	// printVersion, chamada tanto daqui quanto de newVersionCommand, então a
+	// garantia de saída idêntica entre "--version"/"-v" e o subcomando
+	// "version" continua valendo (ver TestVersionFlagMatchesVersionSubcommand
+	// em version_flag_test.go), só que por construção — as duas formas
+	// chamam a mesma função — em vez de por um template do cobra.
 
-	// O template padrão do cobra (defaultVersionTemplate) imprime algo como
-	// "file-manager version v0.11.0 (...)" — diferente da saída do
-	// subcomando "version" (newVersionCommand, abaixo), que imprime só
-	// "v0.11.0 (...)". Ter duas saídas diferentes para a mesma informação é
-	// exatamente o tipo de divergência que este projeto evita (mesmo
-	// princípio do dry-run compartilhado e do "undo" único — ver AGENTS.md);
-	// um script feito em cima de uma das duas formas seria surpreendido pela
-	// outra. "{{.Version}}\n" imprime só o valor de root.Version (já
-	// formatado por Version.String() acima), byte a byte igual à saída de
-	// "file-manager version".
-	root.SetVersionTemplate("{{.Version}}\n")
-
-	// Registra a flag "--version" explicitamente, ANTES de qualquer
-	// execução: Command.InitDefaultVersionFlag (chamado automaticamente e
-	// de forma idempotente por root.Execute(), inclusive ao montar --help)
-	// só cria a SUA versão da flag quando c.Flags().Lookup("version") ==
-	// nil — registrar aqui de propósito faz o cobra pular a criação da dele
-	// (cujo texto de ajuda sai fixo em inglês, "version for file-manager",
-	// sem gancho de tradução) sem abrir mão de nada do comportamento
-	// embutido: a checagem de "--version" em Command.execute só olha o
-	// FLAG (por nome, "version"/bool), não quem o registrou. O atalho "-v"
-	// está livre neste CLI — nenhuma ferramenta nem subcomando o usa — e o
-	// próprio cobra só teria escolhido "v" de qualquer forma
-	// (ShorthandLookup("v") == nil); registrar aqui documenta essa escolha
-	// em vez de depender do fallback silencioso da biblioteca.
+	// Registra a flag "--version" explicitamente: como root.Version ficou
+	// vazio, Command.InitDefaultVersionFlag (chamado automaticamente e de
+	// forma idempotente por root.Execute()) nunca criaria a flag sozinho —
+	// ela só existe hoje porque este registro manual roda de qualquer
+	// forma, sem depender de root.Version. O atalho "-v" está livre neste
+	// CLI — nenhuma ferramenta nem subcomando o usa.
 	root.Flags().BoolP("version", "v", false, "mostra a versão do binário")
 
 	for _, t := range Tools() {
@@ -443,9 +455,82 @@ func newVersionCommand(v Version) *cobra.Command {
 		Use:   "version",
 		Short: "Mostra a versão do binário",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println(v.String())
+			printVersion(v, ui.IsOutputTerminal(), selfupdate.NewChecker)
 			return nil
 		},
+	}
+}
+
+// versionNoticeTimeout é o tempo máximo que printVersion espera pelo
+// resultado da checagem de atualização antes de desistir e imprimir só a
+// versão. Deliberadamente curto (bem menor que updateNoticeWaitTimeout do
+// menu principal, em internal/ui/mainmenu — 1,5s): quem digita
+// "--version"/"version" está fazendo uma pergunta pontual e espera resposta
+// imediata; o aviso de atualização é um extra sobre essa resposta, nunca
+// pode ser o motivo de fazer o comando demorar. Sem internet — ou com rede
+// mais lenta que isso — o timeout estoura e nada além da versão é
+// impresso, o mesmo comportamento de hoje.
+const versionNoticeTimeout = 1 * time.Second
+
+// printVersion imprime a linha de versão — sempre em stdout, sempre
+// PRIMEIRO, byte a byte igual entre "--version", "-v" e o subcomando
+// "version" (as três chamam esta mesma função, o que torna essa igualdade
+// estrutural, não uma coincidência a manter por disciplina — ver
+// TestVersionFlagMatchesVersionSubcommand em version_flag_test.go) — e,
+// só quando outputIsTerminal for true, tenta emitir em seguida o aviso de
+// atualização disponível.
+//
+// outputIsTerminal decide toda a diferença entre um script/pipe (recebe só
+// a versão, na hora, sem tocar rede) e alguém olhando um terminal de
+// verdade (pode ganhar, além da versão, o aviso — se houver e se a checagem
+// responder dentro de versionNoticeTimeout). Ver ui.IsOutputTerminal para o
+// raciocínio de por que essa decisão olha stdout e não stdin.
+//
+// newChecker existe para permitir injeção nos testes (ver
+// version_flag_test.go): com outputIsTerminal=false, printVersion nunca
+// chama newChecker — nem o Checker é criado, nem Start() roda, então
+// nenhuma consulta de rede acontece. É essa ausência de chamada, provada
+// contando invocações de um newChecker falso, que garante que capturar a
+// saída de um script nunca paga o custo (nem o risco) de uma consulta de
+// rede. Em produção, os dois pontos de chamada (RunE da flag "--version" e
+// newVersionCommand) passam selfupdate.NewChecker, o construtor real.
+//
+// O aviso, quando emitido, vai para stderr (ui.WarnStderrf/ui.InfoStderrf),
+// não stdout: assim, mesmo com outputIsTerminal=true, quem capturar só o
+// stdout (ex: "versao=$(file-manager --version)") continua recebendo
+// exatamente o valor da versão, nunca o aviso misturado.
+func printVersion(
+	v Version,
+	outputIsTerminal bool,
+	newChecker func(repo, currentVersion string) *selfupdate.Checker,
+) {
+	fmt.Println(v.String())
+
+	if !outputIsTerminal {
+		return
+	}
+
+	checker := newChecker(selfupdate.DefaultRepo, v.Version)
+	checker.Start()
+
+	notice, ok := checker.WaitNotice(versionNoticeTimeout)
+	if !ok || notice == "" {
+		// Sem aviso pronto a tempo: rede indisponível, resposta mais lenta
+		// que o timeout, já na versão mais recente, ou versão local
+		// não-semver (build "dev" — WaitNotice devolve na hora nesse caso,
+		// sem esperar nada nem consultar rede). Silêncio absoluto: quem
+		// pediu a versão não veio até aqui para depurar conectividade.
+		return
+	}
+
+	// Mesma distinção de severidade do menu principal (Decisão 12 do
+	// AGENTS.md): correção de defeito e mudança incompatível recebem
+	// destaque de aviso (ui.WarnStderrf); novidade pura usa ui.InfoStderrf.
+	switch checker.Severity() {
+	case selfupdate.SeverityPatch, selfupdate.SeverityMajor:
+		ui.WarnStderrf("%s", notice)
+	default:
+		ui.InfoStderrf("%s", notice)
 	}
 }
 

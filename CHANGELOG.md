@@ -10,6 +10,8 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - **MINOR:** Incrementado quando são adicionadas novas ferramentas, novos modos, ou novas flags que não quebram compatibilidade com versões anteriores.
 - **PATCH:** Incrementado para correções de bugs e melhorias internas que não afetam a interface externa.
 
+A `1.0.0` é a declaração de estabilidade do projeto — o ponto em que a interface externa (flags, subcomandos, formato YAML de perfis) passa a ser considerada estável e suportada, não mais um bump de MINOR como os anteriores. **A partir dela**, a regra de MAJOR acima passa a valer no sentido usual do Versionamento Semântico: um incremento de MAJOR sinaliza quebra de compatibilidade com o que já está publicado. Antes da `1.0.0`, MINOR também podia trazer mudança de comportamento sem o mesmo compromisso de estabilidade — ver `AGENTS.md` para o detalhe do que fica congelado a partir desta versão.
+
 ## [Não publicado]
 
 ### Alterado
@@ -22,7 +24,13 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
-## [1.0.0]
+## [1.0.0] - 2026-08-11
+
+Primeira versão de produção: a interface externa (flags, subcomandos, formato YAML de perfis) passa a ser considerada estável — ver a nota na Política de Versionamento acima e a decisão correspondente em `AGENTS.md`. Não há mudança incompatível nesta versão; o motivo do MAJOR é a declaração de estabilidade em si, não uma quebra.
+
+### Adicionado
+
+- **`file-manager --version`/`-v` e o subcomando `version` agora também avisam quando há uma versão mais nova publicada** — antes esse aviso só existia no menu interativo. `--version` é o momento em que o usuário está perguntando exatamente "em que versão estou?"; é o momento natural de saber que existe uma mais nova, sobretudo quando ela corrige um defeito. Duas restrições não-negociáveis moldaram o desenho: (1) `--version` precisa continuar instantâneo e offline — uma consulta de rede síncrona o tornaria lento e dependente de conexão; (2) as três formas (`--version`, `-v`, `version`) produzem hoje saída byte a byte idêntica, garantido por teste, para que um script não quebre trocando de uma para outra. A solução para as duas: o aviso só aparece quando a saída padrão é um terminal (`ui.IsOutputTerminal()`, nova função em `internal/ui/term.go`, análoga a `IsInteractive()` mas sobre `os.Stdout` em vez de `os.Stdin` — a distinção importa porque `--version > arquivo` mantém o stdin de terminal, só o stdout é redirecionado). Redirecionado ou em pipe, a saída continua sendo, hoje como sempre, só a linha da versão, imediata e sem tocar rede. A linha da versão sempre sai primeiro (em stdout); o aviso, quando existe, vai inteiramente para `stderr` (`ui.WarnStderrf`/`ui.InfoStderrf`, novas variantes de `ui.Warnf`/`ui.Infof`), então capturar só stdout nunca traz o aviso junto — a garantia de saída idêntica entre as três formas continua valendo, agora explicitamente restrita a stdout. A consulta usa `selfupdate.Checker.WaitNotice` com um timeout de 1s (`internal/app/root.go`, menor que o 1,5s do menu — quem pede a versão espera resposta imediata); versão local não-semver (`dev`) não consulta nada. `--version`/`-v` deixaram de usar o mecanismo embutido do cobra (`root.Version`/`SetVersionTemplate`), que intercepta a flag antes de qualquer `RunE` e não dava gancho para imprimir o aviso depois da versão — o tratamento agora vive no `RunE` do comando raiz, chamando a mesma função `printVersion` usada pelo subcomando `version`, o que torna a igualdade de saída estrutural em vez de mantida por disciplina entre dois blocos de código.
 
 ### Corrigido
 
