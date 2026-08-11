@@ -131,13 +131,14 @@ func runUndo(m history.Manifest) {
 		return
 	}
 
-	ui.Infof("%s", plan.Summary())
-	for _, line := range plan.SkippedLines() {
-		ui.Warnf("%s", line)
-	}
-
+	// A tela não tem um equivalente a --dry-run pedido explicitamente,
+	// então NUNCA passa previewRequested=true a BuildUndoReport — a
+	// palavra "simulação" não tem lugar aqui. Quando não há nada a
+	// restaurar, o relatório (que distingue "nada a fazer" de "preservado
+	// por segurança") já é a última coisa a mostrar; não há confirmação a
+	// pedir nem execução real a fazer.
 	if len(plan.Restored) == 0 {
-		ui.Infof("Nada a fazer.")
+		printUndoReport(history.BuildUndoReport(plan, false, nil), false)
 		ui.Pause()
 		return
 	}
@@ -169,11 +170,28 @@ func runUndo(m history.Manifest) {
 		ui.Warnf("aviso: desfazer concluído, mas não foi possível marcar a operação como desfeita no histórico: %v", err)
 	}
 
-	ui.Successf("%s", result.Summary())
-	for _, line := range result.SkippedLines() {
-		ui.Infof("%s", line)
-	}
+	// Único ponto de impressão do resultado real: plan nunca é impresso
+	// separadamente em nenhum outro lugar deste fluxo, o que impede o
+	// resumo de aparecer duas vezes.
+	printUndoReport(history.BuildUndoReport(plan, false, &result), true)
 	ui.Pause()
+}
+
+// printUndoReport imprime um history.UndoReport na ordem definida por
+// Lines(): motivos de arquivos pulados primeiro (sempre um aviso), resumo
+// final por último. succeeded controla só o estilo do resumo final:
+// ui.Successf (✓) quando algo foi de fato restaurado, ui.Infof para
+// qualquer outro caso — nunca um "✓" para algo que não aconteceu de
+// verdade.
+func printUndoReport(r history.UndoReport, succeeded bool) {
+	for _, line := range r.Skipped {
+		ui.Warnf("%s", line)
+	}
+	if succeeded {
+		ui.Successf("%s", r.Summary)
+		return
+	}
+	ui.Infof("%s", r.Summary)
 }
 
 // isInterrupt indica se err é (ou envolve) terminal.InterruptErr, sinal de

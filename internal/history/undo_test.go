@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -337,5 +338,218 @@ func TestUndoAlreadyUndoneRefusedWithoutForceAcceptedWithForce(t *testing.T) {
 	}
 	if len(result.Restored) != 1 {
 		t.Fatalf("esperava 1 restaurado com force=true, obteve %d", len(result.Restored))
+	}
+}
+
+// --- Outcome/Summary/BuildUndoReport ---------------------------------------
+//
+// Estes testes travam a correção de apresentação pedida após revisão do
+// PR: a palavra "simulação" só pode aparecer quando o usuário pediu
+// --dry-run explicitamente (BuildUndoReport com previewRequested=true);
+// "nada a fazer" é reservado para quando não havia mesmo nada a desfazer
+// (todas as entradas já ausentes do destino), nunca para quando arquivos
+// foram deliberadamente preservados por segurança; e o resumo nunca deve
+// ser composto duas vezes (BuildUndoReport monta exatamente um relatório
+// por chamada).
+
+func entrySkippedFor(reason SkipReason) SkippedEntry {
+	return SkippedEntry{Entry: Entry{Dest: "/destino/x.pdf"}, Reason: reason}
+}
+
+// TestOutcomeNeverMentionsSimulacao confere que Outcome() — usado sempre
+// que o resultado reportado NÃO é uma prévia pedida pelo usuário — jamais
+// inclui a palavra "simulação", independente de r.DryRun (que reflete só
+// como Undo foi internamente chamado, não se o usuário pediu uma prévia).
+func TestOutcomeNeverMentionsSimulacao(t *testing.T) {
+	cases := []UndoResult{
+		{DryRun: true, Restored: []Entry{{Dest: "/a.pdf"}}, Skipped: nil},
+		{DryRun: false, Restored: []Entry{{Dest: "/a.pdf"}}, Skipped: nil},
+		{DryRun: true, Restored: nil, Skipped: nil},
+		{DryRun: true, Restored: nil, Skipped: []SkippedEntry{entrySkippedFor(SkipMissing)}},
+		{DryRun: true, Restored: nil, Skipped: []SkippedEntry{entrySkippedFor(SkipSizeChanged)}},
+		{DryRun: true, Restored: nil, Skipped: []SkippedEntry{entrySkippedFor(SkipSourceExists)}},
+	}
+
+	for i, r := range cases {
+		got := r.Outcome()
+		if strings.Contains(strings.ToLower(got), "simula") {
+			t.Errorf("caso %d: Outcome() = %q não deveria mencionar simulação", i, got)
+		}
+	}
+}
+
+// TestSummaryMentionsSimulacaoOnlyWhenDryRun confere o outro lado: Summary
+// SÓ inclui o rótulo quando r.DryRun é true, e nunca quando é false — é o
+// método reservado para reportar uma prévia --dry-run pedida de propósito.
+func TestSummaryMentionsSimulacaoOnlyWhenDryRun(t *testing.T) {
+	dryRun := UndoResult{DryRun: true, Restored: []Entry{{Dest: "/a.pdf"}}}
+	if !strings.Contains(dryRun.Summary(), "simulação") {
+		t.Errorf("Summary() com DryRun=true = %q, esperava mencionar \"simulação\"", dryRun.Summary())
+	}
+
+	real := UndoResult{DryRun: false, Restored: []Entry{{Dest: "/a.pdf"}}}
+	if strings.Contains(real.Summary(), "simulação") {
+		t.Errorf("Summary() com DryRun=false = %q, não deveria mencionar \"simulação\"", real.Summary())
+	}
+}
+
+// TestOutcomeAllSkippedMissingSaysNadaAFazer é o caso em que "nada a
+// fazer" É a descrição correta: todas as entradas já estavam ausentes do
+// destino, não havia mesmo o que desfazer.
+func TestOutcomeAllSkippedMissingSaysNadaAFazer(t *testing.T) {
+	r := UndoResult{
+		Restored: nil,
+		Skipped: []SkippedEntry{
+			entrySkippedFor(SkipMissing),
+			entrySkippedFor(SkipMissing),
+		},
+	}
+
+	got := r.Outcome()
+	if !strings.Contains(got, "nada a fazer") {
+		t.Errorf("Outcome() = %q, esperava conter \"nada a fazer\" (todas as entradas já ausentes)", got)
+	}
+}
+
+// TestOutcomeSkippedForSafetyDoesNotSayNadaAFazer é o defeito relatado na
+// revisão: quando arquivos foram preservados por uma decisão de
+// segurança (tamanho mudou, ou origem ocupada), a mensagem final NÃO pode
+// ser "nada a fazer" — havia o que fazer, e a ferramenta escolheu não
+// fazer.
+func TestOutcomeSkippedForSafetyDoesNotSayNadaAFazer(t *testing.T) {
+	cases := []struct {
+		name    string
+		skipped []SkippedEntry
+	}{
+		{"apenas tamanho mudou", []SkippedEntry{entrySkippedFor(SkipSizeChanged)}},
+		{"apenas origem ocupada", []SkippedEntry{entrySkippedFor(SkipSourceExists)}},
+		{"misto: ausente + tamanho mudou", []SkippedEntry{entrySkippedFor(SkipMissing), entrySkippedFor(SkipSizeChanged)}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := UndoResult{Restored: nil, Skipped: tc.skipped}
+			got := r.Outcome()
+			if strings.Contains(got, "nada a fazer") {
+				t.Errorf("Outcome() = %q não deveria dizer \"nada a fazer\" quando algo foi preservado por segurança", got)
+			}
+			if !strings.Contains(got, "preservad") {
+				t.Errorf("Outcome() = %q deveria deixar claro que os arquivos foram preservados por decisão, não ausentes", got)
+			}
+		})
+	}
+}
+
+// TestBuildUndoReportPreviewRequestedMentionsSimulacao confere que o
+// rótulo "[simulação]" só aparece quando previewRequested é true — o
+// caminho usado exclusivamente por uma chamada explícita com --dry-run.
+func TestBuildUndoReportPreviewRequestedMentionsSimulacao(t *testing.T) {
+	plan := UndoResult{DryRun: true, Restored: []Entry{{Dest: "/a.pdf"}}}
+
+	report := BuildUndoReport(plan, true, nil)
+	if !strings.Contains(report.Summary, "simulação") {
+		t.Errorf("BuildUndoReport(..., previewRequested=true, ...).Summary = %q, esperava mencionar \"simulação\"", report.Summary)
+	}
+}
+
+// TestBuildUndoReportRealExecutionNeverMentionsSimulacao é o teste central
+// pedido na revisão: nem o caminho "nada a restaurar, encerrado antes da
+// confirmação" (final=nil) nem o caminho "executado de verdade" (final
+// preenchido) podem, em NENHUMA circunstância, produzir uma linha
+// contendo "simulação" quando previewRequested é false — que é sempre o
+// caso de uma execução real (undo sem --dry-run).
+func TestBuildUndoReportRealExecutionNeverMentionsSimulacao(t *testing.T) {
+	plan := UndoResult{
+		DryRun:   true, // o plano SEMPRE roda em modo simulado internamente
+		Restored: nil,
+		Skipped:  []SkippedEntry{entrySkippedFor(SkipSizeChanged), entrySkippedFor(SkipSourceExists)},
+	}
+
+	// Caminho 1: nada a restaurar, comando encerra antes de confirmar.
+	reportNothingToDo := BuildUndoReport(plan, false, nil)
+	for _, line := range reportNothingToDo.Lines() {
+		if strings.Contains(strings.ToLower(line), "simula") {
+			t.Errorf("linha %q não deveria mencionar simulação (final=nil, previewRequested=false)", line)
+		}
+	}
+
+	// Caminho 2: execução real, algo foi de fato restaurado.
+	final := UndoResult{
+		DryRun:   false,
+		Restored: []Entry{{Dest: "/a.pdf"}},
+		Skipped:  []SkippedEntry{entrySkippedFor(SkipSizeChanged)},
+	}
+	reportExecuted := BuildUndoReport(plan, false, &final)
+	for _, line := range reportExecuted.Lines() {
+		if strings.Contains(strings.ToLower(line), "simula") {
+			t.Errorf("linha %q não deveria mencionar simulação (execução real)", line)
+		}
+	}
+}
+
+// TestBuildUndoReportSkippedForSafetyDoesNotEndWithNadaAFazer é o defeito
+// 2 relatado na revisão, agora travado no nível da função pura: quando o
+// comando roda de verdade (previewRequested=false) e não restaura nada
+// porque os arquivos foram preservados por segurança (não porque já
+// estavam ausentes), o relatório final não pode dizer "Nada a fazer.".
+func TestBuildUndoReportSkippedForSafetyDoesNotEndWithNadaAFazer(t *testing.T) {
+	plan := UndoResult{
+		DryRun:   true,
+		Restored: nil,
+		Skipped:  []SkippedEntry{entrySkippedFor(SkipSizeChanged), entrySkippedFor(SkipSourceExists)},
+	}
+
+	report := BuildUndoReport(plan, false, nil)
+	if strings.Contains(report.Summary, "Nada a fazer") {
+		t.Fatalf("Summary = %q não deveria dizer \"Nada a fazer\" quando os arquivos foram preservados por segurança", report.Summary)
+	}
+}
+
+// TestBuildUndoReportSummaryNeverDuplicated confere a garantia central:
+// para qualquer combinação de argumentos, BuildUndoReport monta EXATAMENTE
+// um resumo (Report.Summary é uma única string, nunca uma lista) — a
+// própria assinatura do tipo UndoReport torna impossível montar um
+// relatório com dois resumos. Este teste documenta essa garantia e prova
+// que Lines() nunca repete o texto do resumo entre as linhas de Skipped.
+func TestBuildUndoReportSummaryNeverDuplicated(t *testing.T) {
+	plan := UndoResult{
+		DryRun:   true,
+		Restored: nil,
+		Skipped:  []SkippedEntry{entrySkippedFor(SkipSizeChanged)},
+	}
+	final := UndoResult{
+		DryRun:   false,
+		Restored: []Entry{{Dest: "/a.pdf"}, {Dest: "/b.pdf"}},
+		Skipped:  nil,
+	}
+
+	for _, tc := range []struct {
+		name             string
+		previewRequested bool
+		final            *UndoResult
+	}{
+		{"prévia pedida", true, nil},
+		{"nada a restaurar", false, nil},
+		{"execução real", false, &final},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := BuildUndoReport(plan, tc.previewRequested, tc.final)
+			lines := report.Lines()
+
+			if len(lines) == 0 {
+				t.Fatal("Lines() não deveria ser vazio")
+			}
+			// A última linha é sempre o resumo; nenhuma linha anterior
+			// (as de Skipped) pode repetir esse mesmo texto.
+			summary := lines[len(lines)-1]
+			if summary != report.Summary {
+				t.Fatalf("última linha de Lines() = %q, esperava que fosse Report.Summary = %q", summary, report.Summary)
+			}
+			for _, line := range lines[:len(lines)-1] {
+				if line == summary {
+					t.Fatalf("resumo %q apareceu duplicado em Lines(): %v", summary, lines)
+				}
+			}
+		})
 	}
 }

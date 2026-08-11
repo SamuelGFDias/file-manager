@@ -166,17 +166,24 @@ func runUndoCommand(m history.Manifest, dryRun, yes, force bool) error {
 		return err
 	}
 
-	ui.Infof("%s", plan.Summary())
-	for _, line := range plan.SkippedLines() {
-		ui.Warnf("%s", line)
-	}
-
+	// dryRun (a flag --dry-run) é o único caso em que o usuário pediu uma
+	// prévia de propósito — é o único caso em que o rótulo "[simulação]"
+	// pode aparecer. BuildUndoReport(plan, dryRun, nil) garante isso: o
+	// segundo argumento nunca é derivado de plan.DryRun (que é sempre
+	// true internamente, pedido --dry-run ou não).
 	if dryRun {
+		printUndoReport(history.BuildUndoReport(plan, true, nil), false)
 		return nil
 	}
 
+	// Nada seria restaurado mesmo executando de verdade: nenhuma
+	// confirmação a pedir, nenhuma execução real a fazer. O relatório usa
+	// plan.Outcome() (via BuildUndoReport com previewRequested=false e
+	// final=nil), que distingue "nada a fazer" de "preservado por
+	// segurança" — nunca a palavra "simulação", porque esta não foi uma
+	// prévia pedida pelo usuário.
 	if len(plan.Restored) == 0 {
-		ui.Infof("Nada a fazer.")
+		printUndoReport(history.BuildUndoReport(plan, false, nil), false)
 		return nil
 	}
 
@@ -203,10 +210,28 @@ func runUndoCommand(m history.Manifest, dryRun, yes, force bool) error {
 		ui.Warnf("aviso: desfazer concluído, mas não foi possível marcar a operação como desfeita no histórico: %v", err)
 	}
 
-	ui.Successf("%s", result.Summary())
-	for _, line := range result.SkippedLines() {
-		ui.Infof("%s", line)
-	}
+	// Único ponto de impressão do resultado real: nem plan nem result são
+	// impressos separadamente em nenhum outro lugar deste fluxo, o que
+	// impede o resumo de aparecer duas vezes.
+	printUndoReport(history.BuildUndoReport(plan, false, &result), true)
 
 	return nil
+}
+
+// printUndoReport imprime um history.UndoReport na ordem definida por
+// Lines(): motivos de arquivos pulados primeiro (sempre um aviso — cada
+// linha já explica, por si, uma decisão de segurança), resumo final por
+// último. succeeded controla só o estilo do resumo final: ui.Successf
+// (✓) quando algo foi de fato restaurado numa execução real, ui.Infof
+// para qualquer outro caso (prévia, ou execução real que preservou tudo
+// por segurança) — nunca um "✓" para algo que não aconteceu de verdade.
+func printUndoReport(r history.UndoReport, succeeded bool) {
+	for _, line := range r.Skipped {
+		ui.Warnf("%s", line)
+	}
+	if succeeded {
+		ui.Successf("%s", r.Summary)
+		return
+	}
+	ui.Infof("%s", r.Summary)
 }

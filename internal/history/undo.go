@@ -49,14 +49,65 @@ type UndoResult struct {
 // linhas numa tela de terminal não ajuda ninguém.
 const MaxSkippedDetails = 10
 
-// Summary devolve um resumo textual curto do resultado, ex: "12 arquivos
-// restaurados, 2 pulados".
+// Outcome devolve a linha de resumo de r, SEM NENHUM rótulo de
+// prévia/simulação — quem decide se (e como) marcar um resultado como uma
+// prévia é BuildUndoReport, nunca este método. Existe separado de Summary
+// porque r.DryRun reflete apenas COMO Undo foi chamado internamente (o
+// plano de confirmação sempre roda com dryRun=true, pedido pelo usuário ou
+// não) — usar Summary() (que olha r.DryRun) para reportar o resultado de
+// uma execução real que não restaurou nada, só porque o PLANO usado para
+// decidir isso foi computado em modo simulado, é exatamente o defeito que
+// fez a palavra "simulação" aparecer numa execução real.
+//
+// Distingue três casos quando nada foi restaurado:
+//   - manifesto sem nenhuma entrada (r.Skipped também vazio);
+//   - todas as entradas já estavam ausentes do destino ("nada a fazer":
+//     não havia mesmo o que desfazer, alguém já cuidou disso por fora);
+//   - havia arquivos no destino, mas cada um foi deliberadamente
+//     preservado por algum motivo de segurança (tamanho mudou, origem
+//     ocupada) — bem diferente de "nada a fazer": a operação decidiu não
+//     mexer, por segurança, e o texto precisa deixar isso claro.
+func (r UndoResult) Outcome() string {
+	if len(r.Restored) > 0 {
+		return fmt.Sprintf("%d arquivos restaurados, %d pulados", len(r.Restored), len(r.Skipped))
+	}
+	if len(r.Skipped) == 0 {
+		return "nada a desfazer: o manifesto não tem nenhum arquivo registrado"
+	}
+	if allSkippedBecauseMissing(r.Skipped) {
+		return "nada a fazer: todos os arquivos já estavam ausentes do destino"
+	}
+	return fmt.Sprintf(
+		"nenhum arquivo foi restaurado: os %d arquivos encontrados no destino foram preservados por segurança (motivos acima)",
+		len(r.Skipped),
+	)
+}
+
+// allSkippedBecauseMissing indica se TODAS as entradas puladas o foram por
+// já estarem ausentes do destino (SkipMissing) — o único caso em que
+// "nada a fazer" é a descrição correta. Uma única entrada pulada por outro
+// motivo (tamanho mudou, origem ocupada) já basta para que o resultado não
+// seja "nada a fazer", e sim "preservado por segurança".
+func allSkippedBecauseMissing(skipped []SkippedEntry) bool {
+	for _, s := range skipped {
+		if s.Reason != SkipMissing {
+			return false
+		}
+	}
+	return true
+}
+
+// Summary devolve a linha de resumo de r com o rótulo "[simulação] " à
+// frente quando r.DryRun é true. Usada SÓ para reportar uma prévia pedida
+// explicitamente pelo usuário (--dry-run) — para qualquer outro contexto
+// (incluindo o plano interno calculado para dimensionar a confirmação de
+// uma execução real), use Outcome() diretamente; ver BuildUndoReport.
 func (r UndoResult) Summary() string {
 	prefix := ""
 	if r.DryRun {
 		prefix = "[simulação] "
 	}
-	return fmt.Sprintf("%s%d arquivos restaurados, %d pulados", prefix, len(r.Restored), len(r.Skipped))
+	return prefix + r.Outcome()
 }
 
 // SkippedLines devolve uma linha por entrada pulada (caminho de destino e
@@ -76,6 +127,63 @@ func (r UndoResult) SkippedLines() []string {
 		lines = append(lines, fmt.Sprintf("%s: %s", s.Entry.Dest, s.Reason))
 	}
 	return lines
+}
+
+// UndoReport é o texto exato a imprimir para uma chamada do comando
+// "undo" (ou da tela equivalente), já decidido por BuildUndoReport —
+// nenhum chamador deve montar essas linhas à mão, que foi exatamente o
+// que deixou passar tanto o rótulo "[simulação]" indevido numa execução
+// real quanto o resumo impresso duas vezes.
+type UndoReport struct {
+	// Skipped é uma linha por entrada pulada, para ser impressa ANTES de
+	// Summary — quem lê vê primeiro o motivo de cada uma, só depois o
+	// resultado geral que esses motivos explicam.
+	Skipped []string
+	// Summary é a última linha: o resultado geral da operação.
+	Summary string
+}
+
+// Lines devolve o relatório inteiro, já na ordem de impressão (Skipped,
+// depois Summary).
+func (r UndoReport) Lines() []string {
+	lines := make([]string, 0, len(r.Skipped)+1)
+	lines = append(lines, r.Skipped...)
+	lines = append(lines, r.Summary)
+	return lines
+}
+
+// BuildUndoReport decide exatamente o que mostrar para uma chamada do
+// comando "undo" (ou da tela internal/ui/undo): a única função, pura e
+// sem I/O, que os dois chamadores usam — não podem divergir sobre o que
+// "desfazer" significa nem sobre como reportar isso.
+//
+//   - preview é sempre o plano calculado com Undo(m, true, force): existe
+//     de qualquer forma, porque é preciso para dimensionar a pergunta de
+//     confirmação antes de tocar em qualquer arquivo.
+//   - previewRequested é true SÓ quando o usuário passou --dry-run
+//     explicitamente. Controla se Summary carrega o rótulo "[simulação]"
+//     — e NUNCA deve ser derivado de preview.DryRun, que é sempre true
+//     internamente (o plano roda em modo simulado tenha o usuário pedido
+//     --dry-run ou não). Foi exatamente essa confusão — usar o campo
+//     DryRun do plano interno para decidir o rótulo — que fazia
+//     "[simulação]" aparecer numa execução real pedida sem --dry-run.
+//   - final é o resultado da execução real (Undo(m, false, force)), ou
+//     nil quando nada foi executado de verdade — seja porque
+//     previewRequested é true (o usuário só queria ver o plano), seja
+//     porque preview.Restored já estava vazio e o comando encerrou antes
+//     de sequer perguntar confirmação.
+//
+// Consolidar a decisão aqui — e cada chamador imprimir exatamente UM
+// UndoReport por invocação, nunca preview e final separadamente — é o que
+// impede o resumo de ser composto (e mostrado) duas vezes.
+func BuildUndoReport(preview UndoResult, previewRequested bool, final *UndoResult) UndoReport {
+	if previewRequested {
+		return UndoReport{Summary: preview.Summary(), Skipped: preview.SkippedLines()}
+	}
+	if final != nil {
+		return UndoReport{Summary: final.Outcome(), Skipped: final.SkippedLines()}
+	}
+	return UndoReport{Summary: preview.Outcome(), Skipped: preview.SkippedLines()}
 }
 
 // ErrAlreadyUndone é devolvido por Undo quando o manifesto já tem UndoneAt
