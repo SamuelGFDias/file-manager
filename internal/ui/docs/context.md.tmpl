@@ -25,6 +25,10 @@ um valor padrão que não esteja explicitamente listado.
 - Prefira adaptar os exemplos de comando abaixo trocando apenas caminhos de
   arquivo/diretório; eles são literais e correspondem ao comportamento real do
   binário.
+- A lista de ferramentas (seções acima) e de comandos auxiliares (seção
+  "Comandos auxiliares", abaixo) é COMPLETA: o `file-manager` não tem nenhum
+  outro comando além dos aqui listados. Não presuma a existência de um
+  comando que não apareça neste documento.
 {{range .Tools}}
 ## {{.Title}}
 
@@ -61,6 +65,43 @@ formato:
 ```
 {{end}}{{if .Notes}}
 ### Avisos
+
+{{range .Notes}}- {{.}}
+{{end}}{{end}}
+{{end}}
+## Comandos auxiliares
+
+Além das ferramentas de manipulação de PDF listadas acima, o `file-manager` tem
+estes comandos auxiliares — eles não aparecem no menu interativo principal como
+"ferramentas", mas são comandos de linha de comando completos, com as mesmas
+garantias de flags documentadas = flags reais.
+{{range .Commands}}
+### {{.Title}}
+
+{{.Summary}}
+
+{{.Description}}
+{{if .WhenToUse}}
+#### Quando usar
+
+{{range .WhenToUse}}- {{.}}
+{{end}}{{end}}{{if .Flags}}
+#### Flags
+
+| Flag | Atalho | Tipo | Default | Descrição |
+| --- | --- | --- | --- | --- |
+{{range .Flags}}| `--{{.Name}}` | {{if .Shorthand}}`-{{.Shorthand}}`{{else}}—{{end}} | {{.Type}} | {{if .Default}}`{{.Default}}`{{else}}—{{end}} | {{.Description}} |
+{{end}}{{end}}{{if .Examples}}
+#### Exemplos
+
+{{range .Examples}}**{{.Title}}**
+
+```bash
+{{.Command}}
+```
+
+{{end}}{{end}}{{if .Notes}}
+#### Avisos
 
 {{range .Notes}}- {{.}}
 {{end}}{{end}}

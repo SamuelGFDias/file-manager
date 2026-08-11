@@ -11,6 +11,7 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/SamuelGFDias/file-manager/internal/commanddocs"
 	"github.com/SamuelGFDias/file-manager/internal/config"
 	"github.com/SamuelGFDias/file-manager/internal/selfupdate"
 	"github.com/SamuelGFDias/file-manager/internal/tool"
@@ -420,7 +421,7 @@ func newDocsCommand(v Version) *cobra.Command {
 				return err
 			}
 
-			if err := docs.Export(f, output, Tools(), v.String()); err != nil {
+			if err := docs.Export(f, output, Tools(), commanddocs.CommandDocs(), v.String()); err != nil {
 				return err
 			}
 

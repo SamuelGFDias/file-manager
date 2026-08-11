@@ -22,15 +22,19 @@ const (
 
 // docsScreen é a tela interativa de exportação de documentação.
 type docsScreen struct {
-	tools   []tool.Tool
-	version string
+	tools    []tool.Tool
+	commands []tool.Doc
+	version  string
 }
 
 // NewScreen devolve a tela interativa de documentação, que permite ao
 // usuário exportar a documentação de contexto ou a skill de agente de IA
-// para um arquivo.
-func NewScreen(tools []tool.Tool, version string) ui.Screen {
-	return &docsScreen{tools: tools, version: version}
+// para um arquivo. commands é a documentação dos comandos auxiliares (ver
+// internal/commanddocs.CommandDocs()) — sem ela, o arquivo exportado pelo
+// menu interativo ficaria com a mesma lacuna que o comando "docs export"
+// tinha antes desta correção.
+func NewScreen(tools []tool.Tool, commands []tool.Doc, version string) ui.Screen {
+	return &docsScreen{tools: tools, commands: commands, version: version}
 }
 
 // Title devolve o título da tela, usado no breadcrumb de navegação.
@@ -82,7 +86,7 @@ func (s *docsScreen) Run(nav *ui.Navigator) error {
 		return err
 	}
 
-	if err := Export(format, path, s.tools, s.version); err != nil {
+	if err := Export(format, path, s.tools, s.commands, s.version); err != nil {
 		ui.Errorf("erro ao exportar documentação: %v", err)
 		ui.Pause()
 		return nil

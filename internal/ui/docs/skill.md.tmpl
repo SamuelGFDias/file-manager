@@ -1,6 +1,6 @@
 ---
 name: file-manager
-description: "CLI para manipular PDFs em lote — une múltiplos PDFs em um só, separa um PDF em vários arquivos e organiza/renomeia PDFs em lote a partir do conteúdo, usando regras baseadas em regex de texto. Use esta skill quando o usuário pedir para unir PDFs, separar (dividir) PDFs, ou organizar e renomear PDFs em lote por conteúdo."
+description: "CLI para manipular PDFs em lote — une múltiplos PDFs em um só, separa um PDF em vários arquivos e organiza/renomeia PDFs em lote a partir do conteúdo, usando regras baseadas em regex de texto. Também desfaz organizações (undo), gerencia perfis salvos (profiles), mostra a versão (version) e se atualiza sozinho (update). Use esta skill quando o usuário pedir para unir, separar, organizar ou renomear PDFs em lote, para desfazer uma organização, ou para exportar/importar/listar perfis salvos de uma ferramenta."
 ---
 
 # file-manager
@@ -20,6 +20,24 @@ Rode:
 
 {{end}}
 Flags essenciais: {{range $i, $f := .Flags}}{{if $i}}, {{end}}`--{{$f.Name}}`{{end}}
+{{end}}
+## Comandos auxiliares
+
+Não são "ferramentas" de PDF, mas são comandos reais do binário — cobertura
+completa, para não inventar comando nenhum além destes.
+{{range .Commands}}
+### {{.Title}}
+
+{{range .WhenToUse}}- {{.}}
+{{end}}
+Rode:
+
+{{range .Examples}}```bash
+{{.Command}}
+```
+
+{{end}}{{if .Flags}}Flags: {{range $i, $f := .Flags}}{{if $i}}, {{end}}`--{{$f.Name}}`{{end}}
+{{end}}
 {{end}}
 ## Regras
 
