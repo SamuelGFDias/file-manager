@@ -324,8 +324,45 @@ func (t *Tool) Command() *cobra.Command {
 	tool.BindAll(cmd.Flags(), t.params())
 	_ = cmd.MarkFlagRequired("input")
 	_ = cmd.MarkFlagRequired("output")
+	_ = cmd.RegisterFlagCompletionFunc("ocr", cobra.FixedCompletions(
+		[]string{"auto", "always", "never"}, cobra.ShellCompDirectiveNoFileComp,
+	))
+	_ = cmd.RegisterFlagCompletionFunc("ocr-lang", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return ocr.CompletionLanguages(), cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = cmd.RegisterFlagCompletionFunc("report-format", cobra.FixedCompletions(
+		[]string{"csv", "json"}, cobra.ShellCompDirectiveNoFileComp,
+	))
+	// A planilha de --csv é sempre um arquivo .csv — deixa o cobra
+	// completar arquivos, filtrando pela extensão, em vez de listar
+	// candidatos manualmente.
+	_ = cmd.RegisterFlagCompletionFunc("csv", cobra.FixedCompletions(
+		[]string{"csv"}, cobra.ShellCompDirectiveFilterFileExt,
+	))
+	_ = cmd.RegisterFlagCompletionFunc("csv-levels", csvLevelsCompletion)
 
 	return cmd
+}
+
+// csvLevelsCompletion completa --csv-levels com os nomes de coluna do
+// cabeçalho da planilha já apontada em --csv (lido do próprio FlagSet do
+// comando em execução, via cmd.Flags().GetString("csv") — o valor que o
+// usuário já digitou antes de chegar em --csv-levels na linha de comando).
+// Sem --csv preenchido, ou se o arquivo não existir/não puder ser lido
+// (planilha ainda não criada, caminho digitado pela metade, permissão),
+// devolve lista vazia sem erro: completação nunca pode falhar ruidosamente.
+func csvLevelsCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	csvPath, err := cmd.Flags().GetString("csv")
+	if err != nil || strings.TrimSpace(csvPath) == "" {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	header, err := pdfutil.ReadCSVHeader(csvPath)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	return header, cobra.ShellCompDirectiveNoFileComp
 }
 
 // historyRecorder monta a função injetada em pdfutil.OrganizeOptions.

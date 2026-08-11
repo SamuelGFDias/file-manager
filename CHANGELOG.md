@@ -18,6 +18,18 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.8.0] - 2026-08-11
+
+### Adicionado
+
+- **Completação de valores de flag no shell (Tab).** O cobra já completava nomes de comando e de flag; agora também completa **valores**. Enums fixos: `split-pdf --mode` (`page`/`range`/`regex`), `--ocr` em `split-pdf`/`organize-pdf` (`auto`/`always`/`never`), `organize-pdf --report-format` (`csv`/`json`), `merge-pdf --sort` (`name`/`mtime`). Valores dinâmicos, lidos de verdade do sistema: `undo --id` oferece só os identificadores de operações que ainda podem ser desfeitas (manifestos já desfeitos ficam de fora, para não levar a um erro evitável), `profiles list --tool` e `profiles export --tool` oferecem só as ferramentas que suportam perfis salvos, e `profiles import --file`/`organize-pdf --csv` filtram por extensão de arquivo (`yaml`/`yml` e `csv`) delegando ao cobra em vez de listar candidatos manualmente. `--ocr-lang` tenta listar os idiomas de fato instalados via `tesseract --list-langs`, com um limite de 300ms — sem o tesseract disponível, ou se ele não responder a tempo, cai na lista fixa conhecida (`por`, `eng`) em vez de travar a tecla Tab. `organize-pdf --csv-levels` lê o cabeçalho da planilha já apontada em `--csv` e oferece os nomes de coluna; sem `--csv` preenchido, ou com um arquivo que não existe, devolve lista vazia sem erro.
+- **Nenhuma função de completação propaga erro, nunca.** Uma falha ao consultar perfis salvos ou histórico de operações (ex: diretório de configuração inacessível) resulta em lista vazia, jamais em mensagem de erro no meio da linha de comando — um Tab que cospe erro é pior do que um Tab que não completa nada.
+
+### Alterado
+
+- **O comando `completion` (acrescentado automaticamente pelo cobra) saiu da lista de comandos em `--help`.** É a única peça deste CLI em inglês, junto de `help` e do texto de `--help` — e aparecia em destaque para o usuário final que abre o `.exe` com duplo clique e nunca vai escrever uma linha de shell. Ele continua **funcionando normalmente** para quem o invoca diretamente (`file-manager completion zsh`); só a funcionalidade de esconder foi usada (`CompletionOptions.HiddenDefaultCmd`), nunca a de desativar (`DisableDefaultCmd`), que prejudicaria quem usa terminal sem beneficiar ninguém.
+- O comando `help`, o texto da flag `--help` e os **rótulos estruturais da ajuda** (`Usage:`→`Uso:`, `Available Commands:`→`Comandos disponíveis:`, `Flags:`→`Opções:`, `Global Flags:`→`Opções globais:`, entre outros, via `SetUsageTemplate`) foram traduzidos para português — antes, a ajuda saía com descrições em português e rótulos estruturais em inglês, o que lia pior do que não traduzir nada. Dois resquícios continuam em inglês por não terem ponto de customização exposto pelo cobra: o `[flags]` na linha "Uso:" (vem de um método Go interno, não do template) e mensagens de erro do próprio cobra (ex: comando desconhecido). O texto de cada subcomando do `completion` (`completion bash`, `completion zsh`, etc.) também continua em inglês — não é razoavelmente configurável sem reescrever lógica interna do cobra, e o custo é baixo já que o comando está escondido de `--help`.
+
 ## [0.7.0] - 2026-08-11
 
 ### Adicionado

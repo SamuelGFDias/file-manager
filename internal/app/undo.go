@@ -58,8 +58,36 @@ func newUndoCommand() *cobra.Command {
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Desfaz sem pedir confirmação")
 	cmd.Flags().BoolVar(&list, "list", false, "Lista as operações registradas e sai")
 	cmd.Flags().BoolVar(&force, "force", false, "Permite desfazer uma operação que já foi desfeita antes")
+	_ = cmd.RegisterFlagCompletionFunc("id", undoIDCompletion)
 
 	return cmd
+}
+
+// undoIDCompletion completa "--id" com os manifestos ainda não desfeitos,
+// na mesma ordem de history.List() (mais recentes primeiro), no formato
+// "<ID>\t<data> — <pasta de origem>" — o texto depois do TAB vira a
+// descrição mostrada pelo zsh ao lado de cada opção. Só oferece manifestos
+// com UndoneAt vazio: sugerir um ID já desfeito levaria o usuário direto a
+// um erro evitável ("já foi desfeita em ..."). Qualquer erro ao listar o
+// histórico (ex: diretório de configuração inacessível) devolve lista
+// vazia sem propagar o erro — completação nunca pode falhar ruidosamente.
+func undoIDCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	manifests, err := history.List()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	out := make([]string, 0, len(manifests))
+	for _, m := range manifests {
+		if m.UndoneAt != nil {
+			continue
+		}
+		out = append(out, fmt.Sprintf(
+			"%s\t%s — %s",
+			m.ID, m.CreatedAt.Local().Format("02/01/2006 15:04:05"), m.InputDir,
+		))
+	}
+	return out, cobra.ShellCompDirectiveNoFileComp
 }
 
 // printUndoList lista as operações registradas (ID, data, ferramenta,

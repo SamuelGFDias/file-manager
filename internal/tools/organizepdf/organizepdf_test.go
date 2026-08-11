@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/SamuelGFDias/file-manager/internal/history"
+	"github.com/spf13/cobra"
 )
 
 func TestParseLevelFlagsBasic(t *testing.T) {
@@ -714,6 +715,85 @@ func TestRunReportWriteFailureDoesNotFailOperation(t *testing.T) {
 	}
 }
 
+// TestOCRCompletion garante que a completação de --ocr devolve exatamente
+// os três valores aceitos, sem completar arquivo.
+func TestOCRCompletion(t *testing.T) {
+	cmd := New().Command()
+
+	fn, ok := cmd.GetFlagCompletionFunc("ocr")
+	if !ok {
+		t.Fatal("nenhuma função de completação registrada para --ocr")
+	}
+
+	got, directive := fn(cmd, nil, "")
+
+	want := []string{"auto", "always", "never"}
+	if len(got) != len(want) {
+		t.Fatalf("completação de --ocr = %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("completação de --ocr[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+}
+
+// TestOCRLangCompletionFallsBackWithoutTesseract prova que, sem o
+// tesseract disponível, a completação de --ocr-lang devolve a lista fixa
+// conhecida (por, eng) em vez de travar ou falhar.
+func TestOCRLangCompletionFallsBackWithoutTesseract(t *testing.T) {
+	t.Setenv("PATH", "/nao-existe/bin")
+	t.Setenv("TESSERACT_PATH", "/nao-existe/tesseract")
+
+	cmd := New().Command()
+
+	fn, ok := cmd.GetFlagCompletionFunc("ocr-lang")
+	if !ok {
+		t.Fatal("nenhuma função de completação registrada para --ocr-lang")
+	}
+
+	got, directive := fn(cmd, nil, "")
+
+	if len(got) != 2 {
+		t.Fatalf("completação de --ocr-lang sem tesseract = %v, esperava 2 entradas (por, eng)", got)
+	}
+	if !strings.HasPrefix(got[0], "por\t") || !strings.HasPrefix(got[1], "eng\t") {
+		t.Errorf("completação de --ocr-lang sem tesseract = %v, esperava prefixos \"por\\t\" e \"eng\\t\"", got)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+}
+
+// TestReportFormatCompletion garante que a completação de --report-format
+// devolve exatamente os dois formatos aceitos, sem completar arquivo.
+func TestReportFormatCompletion(t *testing.T) {
+	cmd := New().Command()
+
+	fn, ok := cmd.GetFlagCompletionFunc("report-format")
+	if !ok {
+		t.Fatal("nenhuma função de completação registrada para --report-format")
+	}
+
+	got, directive := fn(cmd, nil, "")
+
+	want := []string{"csv", "json"}
+	if len(got) != len(want) {
+		t.Fatalf("completação de --report-format = %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("completação de --report-format[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+}
+
 // --- Validação de --csv e flags relacionadas --------------------------------
 
 func TestValidateCSVOptionsCSVWithLevelIsError(t *testing.T) {
@@ -985,5 +1065,104 @@ func TestRunCSVEmptyLevelCellWarningReachesDetails(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("Result.Details deveria conter o aviso de célula vazia (chave 001, coluna CIDADE): %+v", result.Details)
+	}
+}
+
+// --- Completação de --csv e --csv-levels ------------------------------------
+
+// TestCSVCompletionFiltersCSVExtension garante que --csv delega a
+// completação de arquivo ao cobra, filtrando pela extensão .csv.
+func TestCSVCompletionFiltersCSVExtension(t *testing.T) {
+	cmd := New().Command()
+
+	fn, ok := cmd.GetFlagCompletionFunc("csv")
+	if !ok {
+		t.Fatal("nenhuma função de completação registrada para --csv")
+	}
+
+	got, directive := fn(cmd, nil, "")
+	if directive != cobra.ShellCompDirectiveFilterFileExt {
+		t.Errorf("directive = %v, want ShellCompDirectiveFilterFileExt", directive)
+	}
+	if len(got) != 1 || got[0] != "csv" {
+		t.Errorf("completação de --csv = %v, esperava [\"csv\"]", got)
+	}
+}
+
+// TestCSVLevelsCompletionReadsHeaderFromCSVFlag prova o caso que dá o
+// ganho real: com --csv já apontando para uma planilha de verdade,
+// --csv-levels oferece os nomes de coluna do cabeçalho.
+func TestCSVLevelsCompletionReadsHeaderFromCSVFlag(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "planilha.csv")
+	if err := os.WriteFile(csvPath, []byte("NOTA,CIDADE,BAIRRO\n001,Sao Goncalo,Laranjal\n"), 0o644); err != nil {
+		t.Fatalf("criar planilha de teste: %v", err)
+	}
+
+	cmd := New().Command()
+	if err := cmd.Flags().Set("csv", csvPath); err != nil {
+		t.Fatalf("cmd.Flags().Set(\"csv\", ...): %v", err)
+	}
+
+	fn, ok := cmd.GetFlagCompletionFunc("csv-levels")
+	if !ok {
+		t.Fatal("nenhuma função de completação registrada para --csv-levels")
+	}
+
+	got, directive := fn(cmd, nil, "")
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+
+	want := []string{"NOTA", "CIDADE", "BAIRRO"}
+	if len(got) != len(want) {
+		t.Fatalf("completação de --csv-levels = %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("completação de --csv-levels[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+}
+
+// TestCSVLevelsCompletionEmptyWithoutCSVFlag garante que, sem --csv
+// preenchido, --csv-levels devolve lista vazia sem erro.
+func TestCSVLevelsCompletionEmptyWithoutCSVFlag(t *testing.T) {
+	cmd := New().Command()
+
+	fn, ok := cmd.GetFlagCompletionFunc("csv-levels")
+	if !ok {
+		t.Fatal("nenhuma função de completação registrada para --csv-levels")
+	}
+
+	got, directive := fn(cmd, nil, "")
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+	if len(got) != 0 {
+		t.Errorf("completação de --csv-levels sem --csv = %v, esperava lista vazia", got)
+	}
+}
+
+// TestCSVLevelsCompletionEmptyWhenFileMissing garante que, com --csv
+// apontando para um arquivo inexistente, --csv-levels devolve lista vazia
+// sem erro (nunca propaga o erro de leitura).
+func TestCSVLevelsCompletionEmptyWhenFileMissing(t *testing.T) {
+	cmd := New().Command()
+	if err := cmd.Flags().Set("csv", filepath.Join(t.TempDir(), "nao-existe.csv")); err != nil {
+		t.Fatalf("cmd.Flags().Set(\"csv\", ...): %v", err)
+	}
+
+	fn, ok := cmd.GetFlagCompletionFunc("csv-levels")
+	if !ok {
+		t.Fatal("nenhuma função de completação registrada para --csv-levels")
+	}
+
+	got, directive := fn(cmd, nil, "")
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+	if len(got) != 0 {
+		t.Errorf("completação de --csv-levels com arquivo inexistente = %v, esperava lista vazia", got)
 	}
 }

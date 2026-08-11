@@ -2,6 +2,8 @@ package mergepdf
 
 import (
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestNewNotNil(t *testing.T) {
@@ -110,5 +112,32 @@ func TestProfileApplyWrongTypeReturnsError(t *testing.T) {
 	_, err := New().Profile().Apply("não é *Options")
 	if err == nil {
 		t.Fatal("Apply() com tipo errado deveria devolver erro, devolveu nil")
+	}
+}
+
+// TestSortCompletion garante que a completação de --sort devolve
+// exatamente os dois valores aceitos ("name", "mtime"), sem completar
+// arquivo (ShellCompDirectiveNoFileComp).
+func TestSortCompletion(t *testing.T) {
+	cmd := New().Command()
+
+	fn, ok := cmd.GetFlagCompletionFunc("sort")
+	if !ok {
+		t.Fatal("nenhuma função de completação registrada para --sort")
+	}
+
+	got, directive := fn(cmd, nil, "")
+
+	want := []string{"name", "mtime"}
+	if len(got) != len(want) {
+		t.Fatalf("completação de --sort = %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("completação de --sort[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
 	}
 }

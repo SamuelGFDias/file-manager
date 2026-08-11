@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/SamuelGFDias/file-manager/internal/pdfutil"
+	"github.com/spf13/cobra"
 )
 
 func TestMetaID(t *testing.T) {
@@ -227,5 +228,86 @@ func TestProfileEmpty(t *testing.T) {
 	}
 	if empty.Mode != "page" {
 		t.Errorf("Empty().Mode = %q, want %q", empty.Mode, "page")
+	}
+}
+
+// TestModeCompletion garante que a completação de --mode devolve
+// exatamente os três modos aceitos, na ordem estável de modeOrder, sem
+// completar arquivo.
+func TestModeCompletion(t *testing.T) {
+	cmd := New().Command()
+
+	fn, ok := cmd.GetFlagCompletionFunc("mode")
+	if !ok {
+		t.Fatal("nenhuma função de completação registrada para --mode")
+	}
+
+	got, directive := fn(cmd, nil, "")
+
+	want := []string{"page", "range", "regex"}
+	if len(got) != len(want) {
+		t.Fatalf("completação de --mode = %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("completação de --mode[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+}
+
+// TestOCRCompletion garante que a completação de --ocr devolve exatamente
+// os três valores aceitos, sem completar arquivo.
+func TestOCRCompletion(t *testing.T) {
+	cmd := New().Command()
+
+	fn, ok := cmd.GetFlagCompletionFunc("ocr")
+	if !ok {
+		t.Fatal("nenhuma função de completação registrada para --ocr")
+	}
+
+	got, directive := fn(cmd, nil, "")
+
+	want := []string{"auto", "always", "never"}
+	if len(got) != len(want) {
+		t.Fatalf("completação de --ocr = %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("completação de --ocr[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+}
+
+// TestOCRLangCompletionFallsBackWithoutTesseract prova que, sem o
+// tesseract disponível (PATH e TESSERACT_PATH isolados, como faz
+// e2e/helpers_test.go), a completação de --ocr-lang devolve a lista fixa
+// conhecida (por, eng) em vez de travar ou falhar.
+func TestOCRLangCompletionFallsBackWithoutTesseract(t *testing.T) {
+	t.Setenv("PATH", "/nao-existe/bin")
+	t.Setenv("TESSERACT_PATH", "/nao-existe/tesseract")
+
+	cmd := New().Command()
+
+	fn, ok := cmd.GetFlagCompletionFunc("ocr-lang")
+	if !ok {
+		t.Fatal("nenhuma função de completação registrada para --ocr-lang")
+	}
+
+	got, directive := fn(cmd, nil, "")
+
+	if len(got) != 2 {
+		t.Fatalf("completação de --ocr-lang sem tesseract = %v, esperava 2 entradas (por, eng)", got)
+	}
+	if !strings.HasPrefix(got[0], "por\t") || !strings.HasPrefix(got[1], "eng\t") {
+		t.Errorf("completação de --ocr-lang sem tesseract = %v, esperava prefixos \"por\\t\" e \"eng\\t\"", got)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
 	}
 }

@@ -369,6 +369,30 @@ make clean      # Remover artefatos de build
 
 Além da suíte normal (`make test`), há testes que abrem o binário real dentro de um terminal virtual, enviam teclas como um usuário faria e verificam o que aparece na tela — cobrem navegação interativa (menu, seleção encadeada de pastas em `organize-pdf`) que `go test ./...` não exercita. Ficam em `e2e/` (mais o harness em `internal/testcli/`), rodam só em Linux e são mais lentos, por isso vivem fora do `make test` e têm alvo próprio: `make e2e`. Detalhes em [AGENTS.md](AGENTS.md#testes-ponta-a-ponta-e2e).
 
+### Completação de shell (bash e zsh)
+
+Isto é para quem usa o `file-manager` pelo terminal — se você abre o `.exe` com duplo clique no Windows e usa o menu interativo, pode pular esta seção: ela não muda nada no que você já usa.
+
+O cobra (biblioteca de CLI usada por este projeto) gera o script de completação sob demanda, via `file-manager completion <shell>`. Ele não aparece na lista de comandos de `--help` (é o único comando deste CLI em inglês, então foi escondido para não confundir quem nunca vai usar shell nenhum), mas continua funcionando normalmente.
+
+**Zsh:**
+
+```bash
+file-manager completion zsh > "${fpath[1]}/_file-manager"
+```
+
+Depois, abra um terminal novo (ou rode `autoload -U compinit; compinit`) para o zsh carregar o script. Se `${fpath[1]}` não for gravável, qualquer diretório já listado em `$fpath` serve.
+
+**Bash** (requer o pacote `bash-completion` instalado):
+
+```bash
+file-manager completion bash > /etc/bash_completion.d/file-manager
+```
+
+Sem permissão de root, grave em `~/.local/share/bash-completion/completions/file-manager` (crie a pasta se não existir) e abra um terminal novo.
+
+**O que a completação oferece:** além dos nomes dos comandos e flags (isso o cobra já dá de graça), o Tab completa **valores**: os IDs de operações que ainda podem ser desfeitas (`undo --id`), as ferramentas que suportam perfil (`profiles list/export --tool`), o arquivo de um perfil a importar ou de uma planilha filtrados por extensão (`profiles import --file`, `organize-pdf --csv`), as colunas da planilha já apontada em `--csv` (`organize-pdf --csv-levels`) e os valores aceitos por cada flag de enumeração (`--mode`, `--ocr`, `--ocr-lang`, `--report-format`, `--sort`). Uma consulta que falhe (ex: diretório de configuração inacessível, planilha ainda não criada) nunca aparece como erro no meio da linha de comando — só resulta em nenhuma sugestão.
+
 ## OCR
 
 `split-pdf --mode regex` e `organize-pdf --level` classificam PDFs pelo conteúdo textual. Em um PDF digitalizado (imagem sem camada de texto), esse conteúdo não existe — por isso a ferramenta oferece OCR como alternativa: quando a página não tem texto embutido, a imagem da página é extraída e lida pelo [Tesseract](https://github.com/tesseract-ocr/tesseract).
