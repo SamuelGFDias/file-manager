@@ -135,7 +135,15 @@ func (s *screen) Run(nav *ui.Navigator) error {
 		notice, ok = s.updateChecker.Notice()
 	}
 	if ok {
-		ui.Warnf("%s", notice)
+		// Correção de defeito e mudança incompatível recebem o mesmo
+		// destaque visual (ui.Warnf); novidade pura (SeverityMinor) não
+		// precisa da mesma urgência — ui.Infof basta.
+		switch s.updateChecker.Severity() {
+		case selfupdate.SeverityPatch, selfupdate.SeverityMajor:
+			ui.Warnf("%s", notice)
+		default:
+			ui.Infof("%s", notice)
+		}
 	}
 
 	choice := ""

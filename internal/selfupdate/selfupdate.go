@@ -106,6 +106,74 @@ func LatestRelease(ctx context.Context, repo string) (Release, error) {
 	return r, nil
 }
 
+// Releases consulta todos os releases publicados do repositório "owner/repo"
+// informado em repo, do mais recente para o mais antigo (a ordem devolvida
+// pela própria API do GitHub). Rascunhos e pré-lançamentos são descartados:
+// só releases de fato publicados importam para decidir se há atualização
+// disponível — um rascunho não está no ar para ninguém instalar.
+//
+// Usada no lugar de LatestRelease pelo fluxo de verificação de atualização
+// (Checker e o comando "update"), porque classificar a severidade de uma
+// atualização (ClassifyUpdate) precisa enxergar todo o caminho de versões
+// entre a versão em execução e a mais recente — não só a última. Continua
+// sendo uma única requisição à API, então não há custo adicional de limite
+// de requisições em relação a LatestRelease.
+func Releases(ctx context.Context, repo string) ([]Release, error) {
+	url := fmt.Sprintf("%s/repos/%s/releases?per_page=100", apiBaseURL, repo)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao montar requisição para %s: %w", url, err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", userAgent)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao consultar os releases de %s: %w", repo, err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// segue abaixo
+	case http.StatusNotFound:
+		return nil, fmt.Errorf("o repositório %q não tem nenhum release publicado", repo)
+	case http.StatusForbidden:
+		return nil, fmt.Errorf(
+			"limite de requisições da API do GitHub atingido; aguarde alguns minutos e tente novamente",
+		)
+	default:
+		return nil, fmt.Errorf(
+			"resposta inesperada da API do GitHub ao consultar %s: status %d", repo, resp.StatusCode,
+		)
+	}
+
+	// Envelope local (em vez de estender Release) para não carregar Draft e
+	// Prerelease — irrelevantes fora desta função — no tipo público usado
+	// pelo resto do pacote.
+	var raw []struct {
+		Release
+		Draft      bool `json:"draft"`
+		Prerelease bool `json:"prerelease"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("erro ao interpretar a resposta da API do GitHub: %w", err)
+	}
+
+	releases := make([]Release, 0, len(raw))
+	for _, r := range raw {
+		if r.Draft || r.Prerelease {
+			continue
+		}
+		releases = append(releases, r.Release)
+	}
+
+	return releases, nil
+}
+
 // ParseVersion converte "v1.2.3" ou "1.2.3" (com sufixo opcional de
 // pré-lançamento, ex: "-rc1") em [3]int{major, minor, patch}. Devolve
 // ErrNotSemver para qualquer string que não siga esse formato — inclusive
@@ -166,6 +234,160 @@ func CompareVersions(a, b string) (int, error) {
 	}
 
 	return 0, nil
+}
+
+// Severity classifica o quanto uma atualização disponível importa para o
+// usuário. Ver ClassifyUpdate para as regras completas.
+type Severity int
+
+const (
+	// SeverityNone indica que não há atualização disponível — a versão em
+	// execução já é a mais recente publicada (ou é mais nova que tudo).
+	SeverityNone Severity = iota
+
+	// SeverityMinor indica que só há novidade: nenhum release entre a
+	// versão em execução e a mais recente corrige um defeito, e nenhum
+	// muda o major. Pode esperar.
+	SeverityMinor
+
+	// SeverityPatch indica que existe correção de defeito no caminho entre
+	// a versão em execução e a mais recente — mesmo que o salto pareça só
+	// novidade (ex: 0.8.0 → 0.9.0), porque releases são cumulativos e a
+	// correção de um patch intermediário (0.8.1) já está incluída na
+	// mais recente. Continuar na versão atual significa continuar
+	// exposto ao defeito já corrigido.
+	SeverityPatch
+
+	// SeverityMajor indica mudança incompatível: algum release no caminho
+	// tem major maior que o da versão em execução. Tem precedência sobre
+	// SeverityPatch porque uma atualização automática pode quebrar
+	// automação de quem já usa o formato/flags antigos.
+	SeverityMajor
+)
+
+// ClassifyUpdate decide a severidade da atualização disponível para quem
+// está em current, a partir de releases (não precisa vir ordenada — a
+// classificação não assume nenhuma ordem específica).
+//
+// current não sendo semver (ex: "dev", build local) devolve ok=false sem
+// erro: build local não tem uma "versão atual" para comparar. Não existir
+// nenhum release mais novo que current (já está atualizado, ou current é
+// uma versão de desenvolvimento à frente de tudo que foi publicado) também
+// devolve ok=false, com sev=SeverityNone.
+//
+// O ponto central desta função: a severidade NÃO é decidida comparando
+// current só contra a versão mais recente. Ela pergunta, para TODO release
+// mais novo que current — não só o mais recente — se algum tem major maior
+// (SeverityMajor) ou componente de correção (patch) maior que zero
+// (SeverityPatch). Isso importa porque releases são cumulativos: se current
+// é 0.8.0 e a mais recente é 0.9.0, o salto por si só parece só novidade
+// (0.8.0 → 0.9.0 é um bump de minor). Mas se 0.8.1 foi publicado no meio
+// (0.8.0 < 0.8.1 < 0.9.0), a correção de 0.8.1 está incluída em 0.9.0 — e
+// quem está em 0.8.0 está, agora mesmo, exposto ao defeito que 0.8.1
+// corrigiu. Comparar só "atual" contra "mais recente" perderia esse fato;
+// por isso o algoritmo varre todos os releases mais novos que current, não
+// só o topo da lista.
+//
+// latest é sempre o release de maior versão entre os mais novos que
+// current, independentemente da severidade calculada.
+func ClassifyUpdate(current string, releases []Release) (latest Release, sev Severity, ok bool, err error) {
+	currentVer, verErr := ParseVersion(current)
+	if verErr != nil {
+		return Release{}, SeverityNone, false, nil
+	}
+
+	var (
+		latestVer    [3]int
+		hasNewer     bool
+		hasMajorBump bool
+		hasPatchFix  bool
+	)
+
+	for _, r := range releases {
+		v, parseErr := ParseVersion(r.TagName)
+		if parseErr != nil {
+			// Um release com tag fora do padrão semver não entra na
+			// comparação — não há como saber se é mais novo ou mais
+			// antigo que current. Defensivo: a API do GitHub não garante
+			// que toda tag seja semver.
+			continue
+		}
+
+		if compareVersionArrays(v, currentVer) <= 0 {
+			continue // não é mais novo que current
+		}
+
+		if !hasNewer || compareVersionArrays(v, latestVer) > 0 {
+			latestVer = v
+			latest = r
+			hasNewer = true
+		}
+
+		if v[0] > currentVer[0] {
+			hasMajorBump = true
+		}
+		if v[2] > 0 {
+			hasPatchFix = true
+		}
+	}
+
+	if !hasNewer {
+		return Release{}, SeverityNone, false, nil
+	}
+
+	switch {
+	case hasMajorBump:
+		sev = SeverityMajor
+	case hasPatchFix:
+		sev = SeverityPatch
+	default:
+		sev = SeverityMinor
+	}
+
+	return latest, sev, true, nil
+}
+
+// compareVersionArrays compara dois [3]int já parseados (major, minor,
+// patch), devolvendo -1, 0 ou 1 — mesma semântica de CompareVersions, mas
+// sem repetir o parsing quando os valores já estão em mãos, como dentro do
+// laço de ClassifyUpdate.
+func compareVersionArrays(a, b [3]int) int {
+	for i := range a {
+		if a[i] < b[i] {
+			return -1
+		}
+		if a[i] > b[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+// NoticeText monta o texto do aviso de atualização exibido ao usuário, de
+// acordo com a severidade calculada por ClassifyUpdate. Extraída como
+// função pura (sem tocar em rede nem terminal) para ser testável
+// isoladamente.
+func NoticeText(current string, latest Release, sev Severity) string {
+	switch sev {
+	case SeverityPatch:
+		return fmt.Sprintf(
+			"correção importante disponível: %s → %s — esta atualização corrige um defeito; "+
+				"continuar na versão atual pode gerar resultado inconsistente. Atualize com "+
+				"\"file-manager update\"",
+			current, latest.TagName,
+		)
+	case SeverityMajor:
+		return fmt.Sprintf(
+			"mudanças incompatíveis disponíveis: %s → %s — leia as notas do release antes de "+
+				"atualizar: %s",
+			current, latest.TagName, latest.HTMLURL,
+		)
+	default: // SeverityMinor (e SeverityNone, que não deveria chegar aqui)
+		return fmt.Sprintf(
+			"nova versão disponível: %s → %s — atualize com \"file-manager update\"",
+			current, latest.TagName,
+		)
+	}
 }
 
 // AssetNameFor devolve o nome do artefato publicado para o sistema
@@ -401,14 +623,15 @@ type Checker struct {
 	repo           string
 	currentVersion string
 	timeout        time.Duration
-	fetch          func(ctx context.Context, repo string) (Release, error)
+	fetch          func(ctx context.Context, repo string) ([]Release, error)
 
 	once sync.Once
 	done chan struct{}
 
-	mu     sync.Mutex
-	notice string
-	ready  bool
+	mu       sync.Mutex
+	notice   string
+	severity Severity
+	ready    bool
 }
 
 // NewChecker cria o verificador para currentVersion (a versão em execução)
@@ -418,7 +641,7 @@ func NewChecker(repo, currentVersion string) *Checker {
 		repo:           repo,
 		currentVersion: currentVersion,
 		timeout:        5 * time.Second,
-		fetch:          LatestRelease,
+		fetch:          Releases,
 		done:           make(chan struct{}),
 	}
 }
@@ -445,23 +668,19 @@ func (c *Checker) run() {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
-	release, err := c.fetch(ctx, c.repo)
+	releases, err := c.fetch(ctx, c.repo)
 	if err != nil {
 		return
 	}
 
-	cmp, err := CompareVersions(c.currentVersion, release.TagName)
-	if err != nil || cmp >= 0 {
+	latest, sev, ok, err := ClassifyUpdate(c.currentVersion, releases)
+	if err != nil || !ok {
 		return
 	}
 
-	notice := fmt.Sprintf(
-		"nova versão disponível: %s → %s — atualize com \"file-manager update\"",
-		c.currentVersion, release.TagName,
-	)
-
 	c.mu.Lock()
-	c.notice = notice
+	c.notice = NoticeText(c.currentVersion, latest, sev)
+	c.severity = sev
 	c.ready = true
 	c.mu.Unlock()
 }
@@ -474,6 +693,19 @@ func (c *Checker) Notice() (string, bool) {
 	defer c.mu.Unlock()
 
 	return c.notice, c.ready
+}
+
+// Severity devolve a severidade do aviso pronto — só faz sentido consultar
+// depois que Notice() ou WaitNotice() devolveram ok=true; antes disso
+// devolve SeverityNone. Método separado (em vez de mudar a assinatura de
+// Notice/WaitNotice) para não quebrar quem só quer o texto: o menu
+// principal usa Severity() só para decidir entre ui.Warnf (correção,
+// incompatibilidade) e ui.Infof (novidade).
+func (c *Checker) Severity() Severity {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.severity
 }
 
 // WaitNotice aguarda no máximo timeout pelo resultado da verificação e
