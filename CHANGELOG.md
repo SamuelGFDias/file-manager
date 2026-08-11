@@ -18,6 +18,12 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.10.0] - 2026-08-11
+
+### Adicionado
+
+- **O aviso de nova versão distingue correção de novidade.** Antes, qualquer atualização disponível gerava o mesmo texto genérico. Agora o aviso (no menu principal e em `update`/`update --check`) tem três níveis: **novidade** ("nova versão disponível" — pode esperar), **correção** ("correção importante disponível" — a versão em execução tem um defeito conhecido já corrigido, continuar nela pode gerar resultado inconsistente) e **incompatibilidade** ("mudanças incompatíveis disponíveis" — recomenda ler as notas do release, com a URL, antes de atualizar). A classificação considera **todo o caminho** de releases entre a versão em execução e a mais recente, não só a mais recente: se a versão atual é `0.8.0` e a mais recente é `0.9.0`, o salto por si só parece só novidade, mas se `0.8.1` (uma correção) foi publicada no meio, ela já está incluída em `0.9.0` — e o usuário está exposto ao defeito que ela corrigiu. `internal/selfupdate.Releases` substitui a consulta a `/releases/latest` por `/releases` no fluxo de verificação, sem custo adicional de limite de API.
+
 ## [0.8.1] - 2026-08-11
 
 ### Corrigido

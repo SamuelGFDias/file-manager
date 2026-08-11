@@ -83,6 +83,206 @@ func TestCompareVersionsInvalid(t *testing.T) {
 	}
 }
 
+// TestClassifyUpdatePatchInPath é o caso central desta funcionalidade:
+// current 0.8.0, e entre os releases mais novos existe 0.8.1 (uma
+// correção) além de 0.9.0 (a mais recente). Comparar só 0.8.0 contra
+// 0.9.0 pareceria uma novidade comum (bump de minor); mas 0.8.1 está no
+// caminho, e releases são cumulativos — quem está em 0.8.0 tem o defeito
+// que 0.8.1 corrigiu. A severidade correta é SeverityPatch, com latest
+// sempre sendo o release de maior versão (0.9.0), não o release que
+// disparou a classificação (0.8.1).
+func TestClassifyUpdatePatchInPath(t *testing.T) {
+	releases := []Release{{TagName: "v0.9.0"}, {TagName: "v0.8.1"}, {TagName: "v0.8.0"}}
+
+	latest, sev, ok, err := ClassifyUpdate("v0.8.0", releases)
+	if err != nil {
+		t.Fatalf("ClassifyUpdate devolveu erro inesperado: %v", err)
+	}
+	if !ok {
+		t.Fatal("ok = false, esperava true")
+	}
+	if sev != SeverityPatch {
+		t.Errorf("sev = %v, esperava SeverityPatch", sev)
+	}
+	if latest.TagName != "v0.9.0" {
+		t.Errorf("latest.TagName = %q, esperava %q (a mais recente, não a que disparou a correção)", latest.TagName, "v0.9.0")
+	}
+}
+
+func TestClassifyUpdateMinorOnly(t *testing.T) {
+	releases := []Release{{TagName: "v0.9.0"}, {TagName: "v0.8.0"}}
+
+	latest, sev, ok, err := ClassifyUpdate("v0.8.0", releases)
+	if err != nil {
+		t.Fatalf("ClassifyUpdate devolveu erro inesperado: %v", err)
+	}
+	if !ok {
+		t.Fatal("ok = false, esperava true")
+	}
+	if sev != SeverityMinor {
+		t.Errorf("sev = %v, esperava SeverityMinor", sev)
+	}
+	if latest.TagName != "v0.9.0" {
+		t.Errorf("latest.TagName = %q, esperava %q", latest.TagName, "v0.9.0")
+	}
+}
+
+func TestClassifyUpdatePatchOnly(t *testing.T) {
+	releases := []Release{{TagName: "v0.8.1"}, {TagName: "v0.8.0"}}
+
+	latest, sev, ok, err := ClassifyUpdate("v0.8.0", releases)
+	if err != nil {
+		t.Fatalf("ClassifyUpdate devolveu erro inesperado: %v", err)
+	}
+	if !ok {
+		t.Fatal("ok = false, esperava true")
+	}
+	if sev != SeverityPatch {
+		t.Errorf("sev = %v, esperava SeverityPatch", sev)
+	}
+	if latest.TagName != "v0.8.1" {
+		t.Errorf("latest.TagName = %q, esperava %q", latest.TagName, "v0.8.1")
+	}
+}
+
+func TestClassifyUpdateMajor(t *testing.T) {
+	releases := []Release{{TagName: "v1.0.0"}, {TagName: "v0.8.0"}}
+
+	latest, sev, ok, err := ClassifyUpdate("v0.8.0", releases)
+	if err != nil {
+		t.Fatalf("ClassifyUpdate devolveu erro inesperado: %v", err)
+	}
+	if !ok {
+		t.Fatal("ok = false, esperava true")
+	}
+	if sev != SeverityMajor {
+		t.Errorf("sev = %v, esperava SeverityMajor", sev)
+	}
+	if latest.TagName != "v1.0.0" {
+		t.Errorf("latest.TagName = %q, esperava %q", latest.TagName, "v1.0.0")
+	}
+}
+
+// TestClassifyUpdateMajorTakesPrecedenceOverPatch confirma que
+// incompatibilidade vence correção quando ambas estão no caminho: mudança
+// incompatível merece o aviso mais forte, mesmo que uma correção também
+// exista entre a versão atual e a mais recente.
+func TestClassifyUpdateMajorTakesPrecedenceOverPatch(t *testing.T) {
+	releases := []Release{{TagName: "v1.0.0"}, {TagName: "v0.8.1"}, {TagName: "v0.8.0"}}
+
+	latest, sev, ok, err := ClassifyUpdate("v0.8.0", releases)
+	if err != nil {
+		t.Fatalf("ClassifyUpdate devolveu erro inesperado: %v", err)
+	}
+	if !ok {
+		t.Fatal("ok = false, esperava true")
+	}
+	if sev != SeverityMajor {
+		t.Errorf("sev = %v, esperava SeverityMajor (precedência sobre SeverityPatch)", sev)
+	}
+	if latest.TagName != "v1.0.0" {
+		t.Errorf("latest.TagName = %q, esperava %q", latest.TagName, "v1.0.0")
+	}
+}
+
+func TestClassifyUpdateAlreadyOnLatest(t *testing.T) {
+	releases := []Release{{TagName: "v0.9.0"}, {TagName: "v0.8.0"}}
+
+	_, _, ok, err := ClassifyUpdate("v0.9.0", releases)
+	if err != nil {
+		t.Fatalf("ClassifyUpdate devolveu erro inesperado: %v", err)
+	}
+	if ok {
+		t.Error("ok = true, esperava false quando current já é a mais recente")
+	}
+}
+
+func TestClassifyUpdateCurrentAheadOfEverything(t *testing.T) {
+	releases := []Release{{TagName: "v0.9.0"}, {TagName: "v0.8.0"}}
+
+	_, _, ok, err := ClassifyUpdate("v9.9.9", releases)
+	if err != nil {
+		t.Fatalf("ClassifyUpdate devolveu erro inesperado: %v", err)
+	}
+	if ok {
+		t.Error("ok = true, esperava false quando current é mais nova que tudo publicado")
+	}
+}
+
+func TestClassifyUpdateNonSemverCurrent(t *testing.T) {
+	releases := []Release{{TagName: "v0.9.0"}}
+
+	_, _, ok, err := ClassifyUpdate("dev", releases)
+	if err != nil {
+		t.Fatalf("ClassifyUpdate devolveu erro inesperado para current não-semver: %v", err)
+	}
+	if ok {
+		t.Error("ok = true, esperava false para current \"dev\" (build local)")
+	}
+}
+
+func TestClassifyUpdateEmptyReleases(t *testing.T) {
+	_, _, ok, err := ClassifyUpdate("v0.8.0", nil)
+	if err != nil {
+		t.Fatalf("ClassifyUpdate devolveu erro inesperado: %v", err)
+	}
+	if ok {
+		t.Error("ok = true, esperava false para lista vazia de releases")
+	}
+}
+
+// TestClassifyUpdateOrderIndependent confirma que o resultado não depende
+// da ordem de releases: embaralhada, o resultado precisa ser idêntico ao
+// caso "do mais recente para o mais antigo" documentado.
+func TestClassifyUpdateOrderIndependent(t *testing.T) {
+	ordered := []Release{{TagName: "v0.9.0"}, {TagName: "v0.8.1"}, {TagName: "v0.8.0"}}
+	shuffled := []Release{{TagName: "v0.8.0"}, {TagName: "v0.9.0"}, {TagName: "v0.8.1"}}
+
+	latestOrdered, sevOrdered, okOrdered, errOrdered := ClassifyUpdate("v0.8.0", ordered)
+	latestShuffled, sevShuffled, okShuffled, errShuffled := ClassifyUpdate("v0.8.0", shuffled)
+
+	if errOrdered != nil || errShuffled != nil {
+		t.Fatalf("ClassifyUpdate devolveu erro inesperado: ordered=%v shuffled=%v", errOrdered, errShuffled)
+	}
+	if okOrdered != okShuffled || sevOrdered != sevShuffled || latestOrdered.TagName != latestShuffled.TagName {
+		t.Errorf(
+			"resultado depende da ordem: ordered=(latest=%q sev=%v ok=%v) shuffled=(latest=%q sev=%v ok=%v)",
+			latestOrdered.TagName, sevOrdered, okOrdered, latestShuffled.TagName, sevShuffled, okShuffled,
+		)
+	}
+}
+
+func TestNoticeTextMinor(t *testing.T) {
+	text := NoticeText("v0.8.0", Release{TagName: "v0.9.0"}, SeverityMinor)
+	if !contains(text, "v0.8.0") || !contains(text, "v0.9.0") {
+		t.Errorf("NoticeText = %q, esperava conter as duas versões", text)
+	}
+}
+
+func TestNoticeTextPatch(t *testing.T) {
+	text := NoticeText("v0.8.0", Release{TagName: "v0.9.0"}, SeverityPatch)
+	if !contains(text, "v0.8.0") || !contains(text, "v0.9.0") {
+		t.Errorf("NoticeText = %q, esperava conter as duas versões", text)
+	}
+	if !contains(text, "correção") {
+		t.Errorf("NoticeText = %q, esperava mencionar correção", text)
+	}
+}
+
+func TestNoticeTextMajor(t *testing.T) {
+	latest := Release{TagName: "v1.0.0", HTMLURL: "https://github.com/SamuelGFDias/file-manager/releases/tag/v1.0.0"}
+	text := NoticeText("v0.8.0", latest, SeverityMajor)
+	if !contains(text, "v0.8.0") || !contains(text, "v1.0.0") {
+		t.Errorf("NoticeText = %q, esperava conter as duas versões", text)
+	}
+	if !contains(text, "incompat") {
+		t.Errorf("NoticeText = %q, esperava mencionar incompatibilidade", text)
+	}
+	if !contains(text, latest.HTMLURL) {
+		t.Errorf("NoticeText = %q, esperava conter a URL do release %q", text, latest.HTMLURL)
+	}
+}
+
 func TestAssetNameForValid(t *testing.T) {
 	cases := []struct {
 		goos, goarch, want string
@@ -217,6 +417,80 @@ func TestLatestReleaseForbidden(t *testing.T) {
 	}
 }
 
+func TestReleasesParsesJSONAndFiltersDraftsAndPrereleases(t *testing.T) {
+	body := `[
+		{"tag_name": "v0.4.0-rc1", "html_url": "https://example.com/rc1", "assets": [], "prerelease": true, "draft": false},
+		{"tag_name": "v0.4.0-draft", "html_url": "https://example.com/draft", "assets": [], "prerelease": false, "draft": true},
+		{"tag_name": "v0.3.0", "html_url": "https://example.com/v0.3.0", "assets": [{"name": "file-manager-linux-amd64", "browser_download_url": "https://example.com/linux"}], "prerelease": false, "draft": false},
+		{"tag_name": "v0.2.1", "html_url": "https://example.com/v0.2.1", "assets": [], "prerelease": false, "draft": false}
+	]`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("User-Agent") == "" {
+			t.Errorf("requisição sem User-Agent")
+		}
+		if r.Header.Get("Accept") != "application/vnd.github+json" {
+			t.Errorf("Accept = %q, esperava application/vnd.github+json", r.Header.Get("Accept"))
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	restore := swapAPIBaseURL(srv.URL)
+	defer restore()
+
+	releases, err := Releases(context.Background(), "SamuelGFDias/file-manager")
+	if err != nil {
+		t.Fatalf("Releases devolveu erro inesperado: %v", err)
+	}
+	if len(releases) != 2 {
+		t.Fatalf("len(releases) = %d, esperava 2 (draft e prerelease descartados): %+v", len(releases), releases)
+	}
+	if releases[0].TagName != "v0.3.0" || releases[1].TagName != "v0.2.1" {
+		t.Errorf("releases = %+v, esperava [v0.3.0, v0.2.1] nesta ordem", releases)
+	}
+	if len(releases[0].Assets) != 1 || releases[0].Assets[0].Name != "file-manager-linux-amd64" {
+		t.Errorf("releases[0].Assets = %+v, esperava 1 asset file-manager-linux-amd64", releases[0].Assets)
+	}
+}
+
+func TestReleasesNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	restore := swapAPIBaseURL(srv.URL)
+	defer restore()
+
+	_, err := Releases(context.Background(), "owner/repo")
+	if err == nil {
+		t.Fatal("Releases esperava erro, devolveu nil")
+	}
+	if !contains(err.Error(), "não tem nenhum release publicado") {
+		t.Errorf("erro = %q, esperava mencionar ausência de releases", err.Error())
+	}
+}
+
+func TestReleasesForbidden(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	restore := swapAPIBaseURL(srv.URL)
+	defer restore()
+
+	_, err := Releases(context.Background(), "owner/repo")
+	if err == nil {
+		t.Fatal("Releases esperava erro, devolveu nil")
+	}
+	if !contains(err.Error(), "limite de requisições") {
+		t.Errorf("erro = %q, esperava mencionar limite de requisições", err.Error())
+	}
+}
+
 func TestDownloadHappyPath(t *testing.T) {
 	const content = "conteudo-do-binario-de-teste"
 
@@ -321,9 +595,9 @@ func TestReplaceAtDifferentDir(t *testing.T) {
 
 func TestNewCheckerNonSemverNeverNotifies(t *testing.T) {
 	c := NewChecker(DefaultRepo, "dev")
-	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+	c.fetch = func(ctx context.Context, repo string) ([]Release, error) {
 		t.Fatal("fetch não deveria ser chamado para versão local não-semver")
-		return Release{}, nil
+		return nil, nil
 	}
 
 	c.Start()
@@ -338,9 +612,9 @@ func TestCheckerNoticeDoesNotBlock(t *testing.T) {
 	block := make(chan struct{})
 
 	c := NewChecker(DefaultRepo, "v0.1.0")
-	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+	c.fetch = func(ctx context.Context, repo string) ([]Release, error) {
 		<-block
-		return Release{TagName: "v9.9.9"}, nil
+		return []Release{{TagName: "v9.9.9"}}, nil
 	}
 
 	c.Start()
@@ -363,7 +637,7 @@ func TestCheckerNoticeDoesNotBlock(t *testing.T) {
 }
 
 func TestCheckerNoticeWithNewerRelease(t *testing.T) {
-	body := `{"tag_name": "v0.3.0", "assets": []}`
+	body := `[{"tag_name": "v0.3.0", "assets": []}]`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -375,7 +649,7 @@ func TestCheckerNoticeWithNewerRelease(t *testing.T) {
 	defer restore()
 
 	c := NewChecker(DefaultRepo, "v0.2.1")
-	c.fetch = LatestRelease
+	c.fetch = Releases
 	c.Start()
 	waitDone(t, c)
 
@@ -386,12 +660,44 @@ func TestCheckerNoticeWithNewerRelease(t *testing.T) {
 	if !contains(notice, "v0.2.1") || !contains(notice, "v0.3.0") || !contains(notice, "update") {
 		t.Errorf("Notice() = %q, esperava conter v0.2.1, v0.3.0 e \"update\"", notice)
 	}
+	if c.Severity() != SeverityMinor {
+		t.Errorf("Severity() = %v, esperava SeverityMinor (nenhum patch no caminho)", c.Severity())
+	}
+}
+
+// TestCheckerNoticeWithPatchInPath é o cenário central desta funcionalidade
+// aplicado ao Checker de ponta a ponta (com fetch simulado): current v0.8.0,
+// releases publicados incluem v0.9.0 (a mais recente) e v0.8.1 (a correção
+// no meio do caminho). O aviso resultante precisa mencionar a palavra
+// "correção" — é isso que o menu usa para decidir destacar com ui.Warnf.
+func TestCheckerNoticeWithPatchInPath(t *testing.T) {
+	c := NewChecker(DefaultRepo, "v0.8.0")
+	c.fetch = func(ctx context.Context, repo string) ([]Release, error) {
+		return []Release{{TagName: "v0.9.0"}, {TagName: "v0.8.1"}}, nil
+	}
+
+	c.Start()
+	waitDone(t, c)
+
+	notice, ok := c.Notice()
+	if !ok {
+		t.Fatal("Notice() = false, esperava aviso disponível")
+	}
+	if !contains(notice, "correção") {
+		t.Errorf("Notice() = %q, esperava conter \"correção\"", notice)
+	}
+	if !contains(notice, "v0.8.0") || !contains(notice, "v0.9.0") {
+		t.Errorf("Notice() = %q, esperava conter v0.8.0 e v0.9.0 (o mais recente)", notice)
+	}
+	if c.Severity() != SeverityPatch {
+		t.Errorf("Severity() = %v, esperava SeverityPatch", c.Severity())
+	}
 }
 
 func TestCheckerNoticeSameVersion(t *testing.T) {
 	c := NewChecker(DefaultRepo, "v0.2.1")
-	c.fetch = func(ctx context.Context, repo string) (Release, error) {
-		return Release{TagName: "v0.2.1"}, nil
+	c.fetch = func(ctx context.Context, repo string) ([]Release, error) {
+		return []Release{{TagName: "v0.2.1"}}, nil
 	}
 
 	c.Start()
@@ -406,9 +712,9 @@ func TestCheckerStartOnlyFetchesOnce(t *testing.T) {
 	var calls int32
 
 	c := NewChecker(DefaultRepo, "v0.1.0")
-	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+	c.fetch = func(ctx context.Context, repo string) ([]Release, error) {
 		atomic.AddInt32(&calls, 1)
-		return Release{TagName: "v0.1.0"}, nil
+		return []Release{{TagName: "v0.1.0"}}, nil
 	}
 
 	var wg sync.WaitGroup
@@ -431,9 +737,9 @@ func TestCheckerConcurrentNoticeCallsDuringCheck(t *testing.T) {
 	block := make(chan struct{})
 
 	c := NewChecker(DefaultRepo, "v0.1.0")
-	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+	c.fetch = func(ctx context.Context, repo string) ([]Release, error) {
 		<-block
-		return Release{TagName: "v0.2.0"}, nil
+		return []Release{{TagName: "v0.2.0"}}, nil
 	}
 
 	c.Start()
@@ -452,7 +758,7 @@ func TestCheckerConcurrentNoticeCallsDuringCheck(t *testing.T) {
 }
 
 func TestWaitNoticeReturnsWithinTimeout(t *testing.T) {
-	body := `{"tag_name": "v0.3.0", "assets": []}`
+	body := `[{"tag_name": "v0.3.0", "assets": []}]`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -464,7 +770,7 @@ func TestWaitNoticeReturnsWithinTimeout(t *testing.T) {
 	defer restore()
 
 	c := NewChecker(DefaultRepo, "v0.2.1")
-	c.fetch = LatestRelease
+	c.fetch = Releases
 	c.Start()
 
 	notice, ok := c.WaitNotice(5 * time.Second)
@@ -480,9 +786,9 @@ func TestWaitNoticeTimesOutWithoutBlocking(t *testing.T) {
 	block := make(chan struct{})
 
 	c := NewChecker(DefaultRepo, "v0.1.0")
-	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+	c.fetch = func(ctx context.Context, repo string) ([]Release, error) {
 		<-block
-		return Release{TagName: "v9.9.9"}, nil
+		return []Release{{TagName: "v9.9.9"}}, nil
 	}
 	defer close(block) // libera a goroutine ao fim do teste, para não vazá-la
 
@@ -507,9 +813,9 @@ func TestWaitNoticeTimeoutStillNoticeableLater(t *testing.T) {
 	block := make(chan struct{})
 
 	c := NewChecker(DefaultRepo, "v0.1.0")
-	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+	c.fetch = func(ctx context.Context, repo string) ([]Release, error) {
 		<-block
-		return Release{TagName: "v9.9.9"}, nil
+		return []Release{{TagName: "v9.9.9"}}, nil
 	}
 
 	c.Start()
@@ -536,8 +842,8 @@ func TestWaitNoticeTimeoutStillNoticeableLater(t *testing.T) {
 
 func TestWaitNoticeReturnsImmediatelyWhenAlreadyDone(t *testing.T) {
 	c := NewChecker(DefaultRepo, "v0.1.0")
-	c.fetch = func(ctx context.Context, repo string) (Release, error) {
-		return Release{TagName: "v0.2.0"}, nil
+	c.fetch = func(ctx context.Context, repo string) ([]Release, error) {
+		return []Release{{TagName: "v0.2.0"}}, nil
 	}
 
 	c.Start()
@@ -564,9 +870,9 @@ func TestWaitNoticeReturnsImmediatelyWhenAlreadyDone(t *testing.T) {
 
 func TestWaitNoticeNonSemverReturnsImmediately(t *testing.T) {
 	c := NewChecker(DefaultRepo, "dev")
-	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+	c.fetch = func(ctx context.Context, repo string) ([]Release, error) {
 		t.Fatal("fetch não deveria ser chamado para versão local não-semver")
-		return Release{}, nil
+		return nil, nil
 	}
 
 	const timeout = 5 * time.Second
@@ -589,9 +895,9 @@ func TestWaitNoticeAndNoticeConcurrentDuringCheck(t *testing.T) {
 	block := make(chan struct{})
 
 	c := NewChecker(DefaultRepo, "v0.1.0")
-	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+	c.fetch = func(ctx context.Context, repo string) ([]Release, error) {
 		<-block
-		return Release{TagName: "v0.2.0"}, nil
+		return []Release{{TagName: "v0.2.0"}}, nil
 	}
 
 	c.Start()

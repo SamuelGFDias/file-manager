@@ -236,7 +236,7 @@ Sem `--id` nem `--last`, em terminal interativo o comando pergunta qual operaç�
 
 ## Atualização
 
-`file-manager update` consulta o último release publicado no GitHub, compara com a versão em execução e, se houver uma mais nova, pede confirmação antes de baixar e substituir o próprio executável.
+`file-manager update` consulta os releases publicados no GitHub, compara com a versão em execução e, se houver algo mais novo, pede confirmação antes de baixar e substituir o próprio executável.
 
 | Flag | Descrição |
 |------|-----------|
@@ -252,6 +252,18 @@ file-manager update --check   # só verifica
 Se já estiver na última versão, o comando informa e sai sem erro. Antes de substituir o executável atual, o binário baixado é executado para validação — um download corrompido aborta a atualização sem tocar no executável em uso.
 
 Além disso, o menu principal verifica em segundo plano (uma vez por sessão) se há uma versão mais nova. Na primeira abertura, o menu aguarda um instante (no máximo 1,5s) pelo resultado dessa verificação e, se houver versão mais nova, exibe um aviso com a progressão de versão e o comando para atualizar. Sem internet, ou se a verificação não chegar a tempo, o menu abre normalmente e nenhum aviso aparece.
+
+### Três tipos de aviso
+
+Nem toda atualização pesa igual, e o aviso — tanto no menu quanto em `update`/`update --check` — distingue três situações:
+
+| Aviso | Quando aparece | O que significa para você |
+|-------|-----------------|----------------------------|
+| **Novidade** ("nova versão disponível") | Nenhum release entre a sua versão e a mais recente corrige um defeito. | Pode esperar — é só recurso novo. |
+| **Correção** ("correção importante disponível") | Existe pelo menos um release de correção (patch) no caminho entre a sua versão e a mais recente — mesmo que o salto pareça só novidade. | A versão que você está rodando tem um defeito conhecido já corrigido. Atualize para não continuar produzindo resultado possivelmente inconsistente. |
+| **Incompatibilidade** ("mudanças incompatíveis disponíveis") | Algum release no caminho aumenta o número major. | O formato de perfis ou a semântica de alguma flag mudou. Leia as notas do release (o aviso traz a URL) antes de atualizar, especialmente se você automatiza o `file-manager`. |
+
+O detalhe que importa: a classificação **não** compara só "sua versão" contra "a mais recente". Ela pergunta se existe alguma correção no caminho inteiro entre as duas. Por exemplo, se você está na `0.8.0` e a mais recente é a `0.9.0`, o salto por si só parece só novidade — mas se a `0.8.1` (uma correção) foi publicada no meio, ela já está incluída na `0.9.0` (releases são cumulativos), e você está, agora, rodando o defeito que ela corrigiu. Por isso o aviso mostra **correção**, não novidade, nesse caso.
 
 ## Perfis
 
