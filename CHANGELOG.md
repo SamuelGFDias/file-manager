@@ -18,6 +18,12 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.3.1] - 2026-08-11
+
+### Corrigido
+
+- **Aviso de versão nova no menu principal agora aparece na primeira abertura.** A verificação roda em segundo plano e leva cerca de 250ms, mas o menu consultava o resultado uma única vez, no instante da abertura, quando ainda não havia chegado — e o seletor assume o terminal logo em seguida, sem redesenhar o menu. Na prática o aviso só apareceria se o usuário entrasse numa ferramenta e voltasse. `selfupdate.Checker` ganhou `WaitNotice(timeout)`, que aguarda no máximo o timeout pelo resultado; o menu usa `WaitNotice(1,5s)` só na primeira renderização e `Notice()` (não bloqueante) nas seguintes. Sem internet ou se o tempo estourar, o menu abre normalmente e nada é exibido.
+
 ## [0.3.0] - 2026-08-11
 
 ### Adicionado

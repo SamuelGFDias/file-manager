@@ -141,7 +141,7 @@ file-manager update --check   # só verifica
 
 Se já estiver na última versão, o comando informa e sai sem erro. Antes de substituir o executável atual, o binário baixado é executado para validação — um download corrompido aborta a atualização sem tocar no executável em uso.
 
-Além disso, o menu principal verifica em segundo plano (uma vez por sessão, sem nunca bloquear a abertura do menu) se há uma versão mais nova e, se houver, exibe um aviso com a progressão de versão e o comando para atualizar. Sem internet, o menu abre normalmente e nenhum aviso aparece.
+Além disso, o menu principal verifica em segundo plano (uma vez por sessão) se há uma versão mais nova. Na primeira abertura, o menu aguarda um instante (no máximo 1,5s) pelo resultado dessa verificação e, se houver versão mais nova, exibe um aviso com a progressão de versão e o comando para atualizar. Sem internet, ou se a verificação não chegar a tempo, o menu abre normalmente e nenhum aviso aparece.
 
 ## Perfis
 

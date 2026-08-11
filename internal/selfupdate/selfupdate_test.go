@@ -451,6 +451,171 @@ func TestCheckerConcurrentNoticeCallsDuringCheck(t *testing.T) {
 	waitDone(t, c)
 }
 
+func TestWaitNoticeReturnsWithinTimeout(t *testing.T) {
+	body := `{"tag_name": "v0.3.0", "assets": []}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	restore := swapAPIBaseURL(srv.URL)
+	defer restore()
+
+	c := NewChecker(DefaultRepo, "v0.2.1")
+	c.fetch = LatestRelease
+	c.Start()
+
+	notice, ok := c.WaitNotice(5 * time.Second)
+	if !ok {
+		t.Fatal("WaitNotice() = false, esperava aviso disponível dentro do timeout")
+	}
+	if !contains(notice, "v0.2.1") || !contains(notice, "v0.3.0") {
+		t.Errorf("WaitNotice() = %q, esperava conter v0.2.1 e v0.3.0", notice)
+	}
+}
+
+func TestWaitNoticeTimesOutWithoutBlocking(t *testing.T) {
+	block := make(chan struct{})
+
+	c := NewChecker(DefaultRepo, "v0.1.0")
+	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+		<-block
+		return Release{TagName: "v9.9.9"}, nil
+	}
+	defer close(block) // libera a goroutine ao fim do teste, para não vazá-la
+
+	c.Start()
+
+	start := time.Now()
+	notice, ok := c.WaitNotice(1 * time.Millisecond)
+	elapsed := time.Since(start)
+
+	if ok {
+		t.Errorf("WaitNotice() = true (notice=%q), esperava false pois o servidor não respondeu a tempo", notice)
+	}
+	if notice != "" {
+		t.Errorf("WaitNotice() notice = %q, esperava string vazia", notice)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("WaitNotice() levou %v para estourar timeout de 1ms; parece ter travado", elapsed)
+	}
+}
+
+func TestWaitNoticeTimeoutStillNoticeableLater(t *testing.T) {
+	block := make(chan struct{})
+
+	c := NewChecker(DefaultRepo, "v0.1.0")
+	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+		<-block
+		return Release{TagName: "v9.9.9"}, nil
+	}
+
+	c.Start()
+
+	notice, ok := c.WaitNotice(1 * time.Millisecond)
+	if ok {
+		t.Fatalf("WaitNotice() = true (notice=%q) antes do fetch ser liberado, esperava false", notice)
+	}
+
+	// A verificação continua em segundo plano mesmo após o timeout de
+	// WaitNotice estourar: liberar o fetch agora e esperar run() terminar
+	// prova que ela não foi abortada.
+	close(block)
+	waitDone(t, c)
+
+	notice, ok = c.Notice()
+	if !ok {
+		t.Fatal("Notice() = false após a checagem terminar em segundo plano, esperava true")
+	}
+	if !contains(notice, "v0.1.0") || !contains(notice, "v9.9.9") {
+		t.Errorf("Notice() = %q, esperava conter as duas versões", notice)
+	}
+}
+
+func TestWaitNoticeReturnsImmediatelyWhenAlreadyDone(t *testing.T) {
+	c := NewChecker(DefaultRepo, "v0.1.0")
+	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+		return Release{TagName: "v0.2.0"}, nil
+	}
+
+	c.Start()
+	waitDone(t, c)
+
+	const timeout = 5 * time.Second
+	start := time.Now()
+	notice, ok := c.WaitNotice(timeout)
+	elapsed := time.Since(start)
+
+	if !ok {
+		t.Fatal("WaitNotice() = false, esperava aviso já pronto")
+	}
+	if !contains(notice, "v0.1.0") || !contains(notice, "v0.2.0") {
+		t.Errorf("WaitNotice() = %q, esperava conter as duas versões", notice)
+	}
+	if elapsed > timeout/10 {
+		t.Errorf(
+			"WaitNotice() levou %v com resultado já pronto; esperava retorno bem abaixo do timeout de %v",
+			elapsed, timeout,
+		)
+	}
+}
+
+func TestWaitNoticeNonSemverReturnsImmediately(t *testing.T) {
+	c := NewChecker(DefaultRepo, "dev")
+	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+		t.Fatal("fetch não deveria ser chamado para versão local não-semver")
+		return Release{}, nil
+	}
+
+	const timeout = 5 * time.Second
+	start := time.Now()
+	notice, ok := c.WaitNotice(timeout)
+	elapsed := time.Since(start)
+
+	if ok {
+		t.Errorf("WaitNotice() = true (notice=%q), esperava false para versão local não-semver", notice)
+	}
+	if elapsed > timeout/10 {
+		t.Errorf(
+			"WaitNotice() levou %v para versão não-semver; esperava retorno imediato, bem abaixo do timeout de %v",
+			elapsed, timeout,
+		)
+	}
+}
+
+func TestWaitNoticeAndNoticeConcurrentDuringCheck(t *testing.T) {
+	block := make(chan struct{})
+
+	c := NewChecker(DefaultRepo, "v0.1.0")
+	c.fetch = func(ctx context.Context, repo string) (Release, error) {
+		<-block
+		return Release{TagName: "v0.2.0"}, nil
+	}
+
+	c.Start()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.Notice()
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.WaitNotice(50 * time.Millisecond)
+		}()
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	close(block)
+	wg.Wait()
+	waitDone(t, c)
+}
+
 // waitDone espera a checagem em segundo plano de c terminar, com um timeout
 // generoso para não deixar o teste travado caso algo quebre.
 func waitDone(t *testing.T, c *Checker) {

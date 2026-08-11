@@ -475,3 +475,34 @@ func (c *Checker) Notice() (string, bool) {
 
 	return c.notice, c.ready
 }
+
+// WaitNotice aguarda no máximo timeout pelo resultado da verificação e
+// devolve o aviso. Se o resultado não chegar a tempo, devolve ("", false) e
+// a verificação continua em segundo plano — uma consulta posterior via
+// Notice() pode devolvê-lo.
+//
+// Pensado para a primeira renderização do menu: a checagem normalmente
+// termina bem antes do timeout (a chamada à API do GitHub leva ~250ms em
+// condições normais), então WaitNotice quase sempre devolve o aviso a
+// tempo; sem rede (ou com rede lenta), o timeout garante que o pior caso é
+// limitado e nunca trava a abertura do menu indefinidamente.
+//
+// Versão local não-semver (ex: "dev") devolve ("", false) imediatamente,
+// sem esperar nada — build local não deve pagar nenhuma latência aqui,
+// mesmo que o timeout informado seja alto.
+//
+// Se Start() nunca foi chamado, WaitNotice não trava: devolve ("", false)
+// somente ao fim do timeout, já que não há como distinguir "verificação
+// nunca vai rodar" de "verificação ainda não rodou" sem essa espera.
+func (c *Checker) WaitNotice(timeout time.Duration) (string, bool) {
+	if _, err := ParseVersion(c.currentVersion); err != nil {
+		return "", false
+	}
+
+	select {
+	case <-c.done:
+		return c.Notice()
+	case <-time.After(timeout):
+		return "", false
+	}
+}
