@@ -12,6 +12,10 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 
 ## [Não publicado]
 
+### Alterado
+
+- **Interno:** o workflow de release (`.github/workflows/release.yml`) agora publica as notas em português automaticamente, extraídas por `.github/extract-release-notes.sh` da própria entrada do changelog (ou de `.github/release-notes/<tag>.md`, quando existir), em vez de exigir edição manual depois da publicação. Não afeta o comportamento do programa; ver `AGENTS.md`, seção "Processo de Release".
+
 ### Planejado
 
 - [ ] Suporte para criptografia de perfis

@@ -175,7 +175,10 @@ Se houver erros de lint, execute `make fmt` para auto-formatar.
 
 Atualize:
 1. **`README.md`:** Adicione uma seção com a tabela de flags e 2 exemplos reais de comando.
-2. **`CHANGELOG.md`:** Adicione uma entrada na seção `[Não publicado]` descrevendo a ferramenta nova.
+2. **`CHANGELOG.md`:** Adicione uma entrada na seção `[Não publicado]` descrevendo a ferramenta nova — o registro técnico, para quem mantém o projeto (nomes de função, tipos, decisões de implementação).
+3. **`.github/release-notes/<tag-planejada>.md`:** escreva também as notas ao usuário final — o que mudou e por que importa para quem usa o programa, sem jargão de implementação. Não é a mesma coisa reescrita, é um texto para outro público (ver `.github/release-notes/README.md`, que traz um exemplo contrastando os dois). Esse arquivo é obrigatório: sem ele, o workflow de release recusa publicar a tag correspondente (ver "Processo de Release" abaixo).
+
+Ambas as entradas — a técnica no CHANGELOG e a do usuário nas notas de release — são revisadas no mesmo PR, junto com o código.
 
 ## Arquitetura e Princípios
 
@@ -225,6 +228,30 @@ Para remover uma flag no futuro:
 
 Isso garante que automações de usuários antigas tenham tempo de se adaptar.
 
+## Processo de Release
+
+Push de uma tag `v*` dispara `.github/workflows/release.yml`: o workflow extrai as notas de release para a tag, roda `go test ./...` como gate, compila os binários de Linux e Windows com `CGO_ENABLED=0` e publica o release com os dois artefatos anexados.
+
+**As notas voltadas ao usuário final são escritas no PR, não depois do release — e escrever a entrada do CHANGELOG não é suficiente.** Ao preparar uma versão, escreva os dois textos, com público diferente:
+
+1. **`CHANGELOG.md`** (seção `## [Não publicado]`, que vira `## [X.Y.Z]` no dia do release): o registro técnico, para quem mantém o projeto. Continua como sempre foi.
+2. **`.github/release-notes/vX.Y.Z.md`**: o texto que o GitHub vai publicar no release, para quem só usa o programa. **Obrigatório** — não é um extra para quando o changelog "não for suficiente". Ver `.github/release-notes/README.md` para o que escrever (e o que não escrever) ali, com um exemplo lado a lado da mesma mudança nos dois textos.
+
+Os dois são revisados como parte do PR, junto com o código — não escritos depois, com o release já publicado.
+
+**Lançar uma versão nova**, depois que a entrada do `CHANGELOG.md` **e** o arquivo em `.github/release-notes/vX.Y.Z.md` já estiverem mesclados em `main`:
+```bash
+git tag -a vX.Y.Z -m "..."
+git push origin vX.Y.Z
+```
+Nada mais é necessário — o workflow cuida de extrair as notas, testar, compilar e publicar.
+
+A versão reportada por `file-manager version` vem da tag, injetada via `-ldflags` — a tag é a fonte da verdade da versão, não o código.
+
+Se `.github/release-notes/vX.Y.Z.md` não existir para a tag, o workflow falha **antes de compilar**, com uma mensagem citando o caminho exato que falta criar. Não há fallback para a seção do changelog — publicar o texto técnico como nota de release seria pior do que falhar, porque passaria despercebido (ver `.github/release-notes/README.md` para o motivo completo).
+
+O job precisa de `permissions: contents: write`; sem isso a publicação do release falha com 403.
+
 ## Checklist para Contribuições
 
 - [ ] Fiz o scaffold com `make new-tool`
@@ -237,6 +264,7 @@ Isso garante que automações de usuários antigas tenham tempo de se adaptar.
 - [ ] `make build` gera o binário
 - [ ] Atualizei `README.md` com exemplos
 - [ ] Atualizei `CHANGELOG.md`
+- [ ] Escrevi `.github/release-notes/<tag-planejada>.md` com as notas ao usuário final
 
 ## Dúvidas?
 
