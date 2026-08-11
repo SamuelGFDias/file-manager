@@ -89,6 +89,42 @@ func IsInteractive() bool {
 	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
 }
 
+// IsOutputTerminal informa se a saída padrão (stdout) é um terminal.
+//
+// Deliberadamente diferente de IsInteractive, que olha o STDIN e decide se
+// o menu interativo pode abrir: aqui a pergunta é outra — "existe alguém
+// olhando a saída agora, ou ela está sendo redirecionada/canalizada para
+// outro programa?". Os dois sinais divergem exatamente no caso que importa:
+// "file-manager --version > arquivo" mantém o stdin ligado ao terminal de
+// quem digitou o comando (IsInteractive() = true), mas o stdout vai para um
+// arquivo — é IsOutputTerminal() que precisa devolver false ali, para que
+// scripts e redirecionamentos continuem recebendo exatamente a saída de
+// sempre, sem o aviso extra de atualização disponível.
+func IsOutputTerminal() bool {
+	return isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
+}
+
+// WarnStderrf é a variante de Warnf que escreve na saída de erro (stderr)
+// em vez de stdout. Warnf/Infof escrevem em stdout porque, historicamente,
+// todo o output deste CLI (inclusive avisos do menu interativo) vive ali.
+// Isso deixa de servir quando o aviso precisa conviver com uma saída que
+// scripts capturam e comparam byte a byte (o valor de "--version"): mesmo
+// com IsOutputTerminal() já filtrando o caso redirecionado, o aviso de
+// atualização emitido ao lado da versão vai para stderr por segurança
+// adicional — quem captura só stdout (ex: "versao=$(file-manager
+// --version)") nunca vê o aviso misturado ao valor.
+func WarnStderrf(format string, a ...any) {
+	msg := fmt.Sprintf(format, a...)
+	prefix := color.New(color.FgYellow).Sprint("!")
+	fmt.Fprintf(os.Stderr, "%s %s\n", prefix, msg)
+}
+
+// InfoStderrf é a variante de Infof que escreve em stderr, pelo mesmo
+// motivo de WarnStderrf.
+func InfoStderrf(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", a...)
+}
+
 // Bold devolve s formatado em negrito, para destacar um trecho pontual de
 // uma mensagem (ex: um nome, um valor) sem recorrer a cor.
 func Bold(s string) string {
