@@ -828,6 +828,46 @@ path := filepath.Join(dir, name + ".yaml")
 
 Em Go, `.` na expressão regular **não casa quebra de linha** por padrão. Texto vindo de OCR quebra linha o tempo todo, então qualquer regex que precise atravessar linhas precisa do prefixo `(?s)` (modo "dotall"). Caso real medido em `organize-pdf`: `MATRÍCULA.*?(\d{6,})` não casava contra texto de OCR; `(?s)MATRÍCULA.*?(\d{6,})` casou e classificou o arquivo corretamente. Sintoma no terreno: a regex "parece certa" (funciona num editor de regex genérico, que costuma ligar dotall por padrão) mas não casa nada dentro da ferramenta — o usuário desconfia de bug antes de suspeitar da própria regex.
 
+## Próximos Passos Avaliados
+
+Nesta seção ficam registradas **quatro melhorias já avaliadas e conscientemente adiadas** — nenhuma é urgente, e cada uma é documentada com a evidência que a motivou e o motivo de não ser urgente hoje. Sem esse registro, correm risco de virar uma lista de desejos sem nenhum contexto: daqui a alguns meses, ninguém lembraria por que existiam nem que problema concreto elas atacavam.
+
+### 1. Verificação por Checksum no Auto-Atualizador
+
+**O que é:** Hoje o comando `file-manager update` baixa o binário e, **antes de substituir**, executa o arquivo baixado com `version` para confirmar que roda. Isso protege contra download truncado ou corrompido. A melhoria seria adicionar validação criptográfica: o workflow de release publicaria um arquivo de somas (ex.: `SHA256SUMS`) junto dos binários, e o `update` conferiria a soma antes de trocar.
+
+**Por que foi considerada:** O canal de comunicação (GitHub releases) e o armazenamento de artefatos (próprio repositório) são autenticados por TLS; a validação por execução (`VerifyBinary`) já cobre o caso realista (download incompleto ou corrompido durante a transmissão). O ganho da verificação criptográfica seria contra um cenário de comprometimento mais profundo: o servidor GitHub sendo invadido, ou o armazenamento de artefatos sendo alterado depois de publicado. Cenário plausível em teoria; raro na prática.
+
+**Por que não é urgente:** O mecanismo existente de execução validante (`VerifyBinary`) funciona bem. A chance de um ataque sofisticado o bastante para alterar artefatos publicados mas não conseguir alterar o GitHub como um todo (ou a conexão HTTPS do usuário) é pequena o bastante para não jusitificar o trabalho hoje. Se publicar SHA256SUMS ficar na prioridade futura, considere também publicá-lo assinado com GPG.
+
+### 2. Normalização do Texto Vindo de OCR
+
+**O que é:** Uma etapa opcional de normalização de texto extraído por OCR, anterior à aplicação da regex de classificação. Colapsar espaços múltiplos, unificar caracteres notoriamente confundidos (ex: `0` ↔ `O`, `1` ↔ `l`), e possivelmente uma comparação tolerante a pequenas diferenças.
+
+**Por que foi considerada — evidência medida:** Durante o desenvolvimento, observou-se em documentos reais que o OCR erra caracteres com frequência. Casos concretos: `ESCOLA` reconhecido como `ESCO` (caractere faltante), confusões entre `0` (zero) e `O` (letra O), entre `1` (um) e `l` (letra L minúscula). Consequência: expressões regulares calibradas sobre texto limpo falham sobre texto de OCR, e o arquivo cai em não-classificados sem que o usuário entenda o motivo.
+
+**Por que não é urgente:** O teste de calibragem em `organize-pdf` já mostra quantos arquivos casariam **antes** de aplicar a regex, alertando sobre potencial descompasso. O relatório de execução informa o motivo de cada não-classificado, então o usuário percebe o problema em vez de ser surpreendido silenciosamente. Isso dá espaço para o usuário ajustar a regex manualmente (tornando-a mais tolerante) em vez de depender de normalização automática.
+
+**Risco a considerar:** Unificar caracteres pode gerar **falsos positivos** — duas notas diferentes, com designações que diferem só num caractere facilmente confundido, virando a mesma chave de classificação. Por isso, se implementada futuramente, a normalização precisa ser **opcional** (flag ou perfil) e **conservadora** (nunca fazer unificação que quebre casos válidos).
+
+### 3. Calibração com Mais de Uma Amostra
+
+**O que é:** Hoje a calibração de expressões regulares em `organize-pdf` usa **um único** PDF de amostra. Se o lote tiver dois layouts diferentes, a regex calibrada na primeira amostra pode não servir para a segunda. A melhoria seria permitir escolher duas ou três amostras e exigir que a regex case em **todas** antes de seguir para a execução real.
+
+**Por que foi considerada:** O cenário é realista — lotes heterogêneos com múltiplas versões de documento (ex: notas fiscais de emissores diferentes, cada um com layout próprio). Calibrar a regex contra a primeira variação e falhar na segunda é uma fonte previsível de erro.
+
+**Por que não é urgente:** O teste de calibragem em `organize-pdf` já roda contra a pasta inteira (ou uma amostra escolhida do usuário) e mostra quantos arquivos casariam. Se a regex calibrada não pegar 100% dos arquivos, o cenário fica evidente no **simulador, antes** de qualquer arquivo ser movido — apenas um pouco mais tarde no fluxo do que seria com múltiplas amostras no passo de calibração. Quem receber esse resultado insatisfatório pode voltar e ajustar a regex manualmente para cobrir ambos os layouts.
+
+### 4. Modo de Observação de Pasta
+
+**O que é:** Um modo (`watch mode`) que monitora um diretório e processa automaticamente os arquivos que forem chegando, aplicando um perfil pré-salvo. Sem intervenção manual, os arquivos chegam, são classificados e saem organizados.
+
+**Por que foi considerada — caso de uso recorrente:** O projeto foi desenvolvido motivado principalmente pelo cenário de lotes de notas fiscais. Na realidade operacional, essas notas não chegam todas de uma vez — elas chegam ao longo do mês. Um modo de observação resolveria essa fricção: dropar a pasta do dia na origem, deixar a ferramenta rodar à noite, acordar com os arquivos organizados no dia seguinte.
+
+**Por que não é urgente:** Rodar a ferramenta manualmente sobre a pasta a cada dia (ou via agendador de sistema tipo `cron`) já resolve o caso de uso — é questão de conveniência, não de capacidade. A ferramenta faz hoje tudo que o caso de uso exige; o ganho seria de conforto do operador.
+
+**Pontos a decidir antes de implementar:** (1) **Arquivo incompleto:** se um PDF ainda está sendo copiado para a pasta observada, há risco de processá-lo parcialmente. Precisa de uma estratégia — ex: ignorar arquivos modificados há menos de N segundos, ou só processar quando o `fstat` de tamanho não mudar por M segundos; (2) **Reprocessamento:** como evitar processar o mesmo arquivo duas vezes (ex: em caso de erro, ou se a configuração mudar)? Registrar um checksum? Um arquivo `.done`? Mover para um `_processed` depois?; (3) **Interrupção:** como o usuário interrompe a observação com segurança? Arquivo de flag? Sinal do SO? A implementação precisa garantir que um Ctrl+C no meio da observação deixa os arquivos em estado consistente.
+
 ## Exploração Adicional
 
 - **docs/CONTRIBUTING.md** — Guia detalhado de contribuição com exemplos

@@ -16,6 +16,7 @@ A `1.0.0` é a declaração de estabilidade do projeto — o ponto em que a inte
 
 ### Alterado
 
+- **Documentação:** `AGENTS.md` agora registra quatro melhorias já avaliadas mas conscientemente adiadas — nenhuma urgente, cada uma documentada com a evidência que a motivou e o motivo de não ser urgente hoje. Sem esse registro, correm risco de virar uma lista de desejos sem contexto. Novas melhorias aparecem numa seção "Próximos Passos Avaliados".
 - **Interno:** o workflow de release (`.github/workflows/release.yml`) agora publica as notas em português automaticamente, extraídas por `.github/extract-release-notes.sh` da própria entrada do changelog (ou de `.github/release-notes/<tag>.md`, quando existir), em vez de exigir edição manual depois da publicação. Não afeta o comportamento do programa; ver `AGENTS.md`, seção "Processo de Release".
 
 ### Planejado
