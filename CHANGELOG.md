@@ -18,6 +18,20 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.2.1] - 2026-08-11
+
+### Corrigido
+
+- **`organize-pdf`: pasta de origem sem PDFs agora é avisada na hora.** Antes, o usuário só descobria a pasta errada no final, depois de toda a calibração de regex, com um "0 de 0 arquivos" sem explicação. Agora a contagem de PDFs acontece no ato da seleção da pasta de origem: zero PDFs bloqueia o avanço e oferece escolher outra pasta (limite de 5 tentativas); com PDFs, confirma de imediato quantos foram encontrados.
+- **`organize-pdf`: aviso quando o PDF de amostra está fora da pasta de origem**, com confirmação explícita (default: não) antes de seguir em frente — foi assim que o usuário calibrou as regras contra um documento que não fazia parte do lote a processar.
+- **`organize-pdf`: resumo antes de aplicar**, com caminhos absolutos de origem e destino, contagem de PDFs, e se a operação vai copiar ou mover.
+- **`organize-pdf`: prompts de seleção agora identificam a etapa** (`PASTA DE ORIGEM`, `PASTA DE DESTINO`, `PDF de AMOSTRA`) em vez do genérico "Selecione um diretório" nas duas etapas.
+- **Seletores de pasta encadeados não voltam mais ao diretório do executável.** Depois de escolher a pasta de origem, o prompt de destino reabria em `~/.file_manager` (pasta do binário), que não tem subpastas e por isso parecia vazia — o usuário concluía que a seleção não tinha funcionado e refazia toda a navegação. O prompt de destino agora começa na pasta de origem recém-selecionada, e o `filepicker` ganhou memória do último diretório usado (`LastDir()`/`resolveStart()`), respeitada sempre que o chamador não passa um `start` explícito.
+
+### Notas
+
+- Descoberta relacionada, documentada em `AGENTS.md` e no `README.md`: em Go, `.` na regex não casa quebra de linha, e texto de OCR quebra linha com frequência — regex que precisam atravessar linhas exigem o prefixo `(?s)`.
+
 ## [0.2.0] - 2026-08-11
 
 ### Adicionado

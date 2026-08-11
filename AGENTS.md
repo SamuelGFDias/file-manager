@@ -158,6 +158,21 @@ Isso é decisão deliberada: editar Go existente por parsing automático é frá
 
 Em `organize-pdf`, a tela de calibração interativa (que sugere regex a partir de um exemplo) e o processamento real usam o mesmo `pdfutil.TextOptions` — mesmo modo de OCR, mesmo idioma. Sem isso, o usuário calibraria a regex contra um texto (ex: extração nativa) e a execução real veria outro (ex: texto de OCR), e a regex calibrada poderia não casar. Mesmo princípio da Decisão 4 (dry-run compartilhado): não há dois caminhos que possam divergir silenciosamente.
 
+### 11. Validação Antecipada e Encadeamento de Seletores em `organize-pdf`
+
+Dois defeitos de usabilidade relatados por uso real (corrigidos na v0.2.1), ambos no fluxo interativo de `organize-pdf` (`internal/tools/organizepdf/screen.go`):
+
+**Pasta de origem vazia só era percebida no final.** O usuário selecionava uma pasta sem PDFs, percorria toda a calibração de regex (níveis, nome do arquivo, teste) e só então via "0 de 0 arquivos". Agora `pickInputDir()` conta os PDFs (`countPDFs()`) no ato da seleção: zero PDFs bloqueia o avanço e oferece escolher outra pasta, com limite de `maxSourceDirAttempts` (5) tentativas. Com PDFs, confirma imediatamente ("N PDFs encontrados na pasta de origem."). `pickSample()` também avisa quando o PDF de amostra está **fora** da pasta de origem (`sampleOutsideInput()`) e pede confirmação explícita (default: não, `maxSampleAttempts` = 5 tentativas) — foi assim que o usuário calibrou contra um documento que não fazia parte do lote. Antes de aplicar, `showConfigSummary()` mostra caminhos absolutos de origem/destino, contagem de PDFs e se vai copiar ou mover.
+
+**Cada seletor reabria no diretório do executável.** Depois de escolher `~/Downloads` como origem, o prompt de destino reabria em `~/.file_manager` (pasta do binário) — sem subpastas, parecia vazia, e o usuário achava que a seleção não tinha funcionado. Correções:
+
+- Em `configure()`, o prompt de destino agora começa em `inputDir` (a pasta de origem recém-selecionada), não em `"."`.
+- `internal/ui/filepicker/filepicker.go` ganhou memória de pacote do último diretório usado com sucesso: `LastDir()`, `ResetLastDir()` (só para isolar testes) e `resolveStart(start string)`.
+
+  **Regra de precedência do `resolveStart` — não inverter:** um `start` explícito e não-vazio **sempre vence** sobre a memória; `LastDir()` só é consultado quando o chamador passa `start == ""`. Isso é proposital: um fluxo que encadeia seletores passando o diretório anterior como `start` (como `organize-pdf` faz) precisa que esse valor seja respeitado à risca, e `splitpdf`/`mergepdf` continuam passando `"."` explicitamente — se a memória pudesse sobrescrever um `start` explícito, o comportamento desses dois viraria imprevisível sem que ninguém tivesse pedido a mudança. Um futuro ajuste que "simplifique" trocando a ordem de checagem quebra essa garantia silenciosamente.
+
+- Novas funções `PickFileWithPrompt(start, prompt, exts)` / `PickDirWithPrompt(start, prompt)` aceitam uma mensagem específica de contexto (`PASTA DE ORIGEM`, `PASTA DE DESTINO`, `PDF de AMOSTRA`) em vez do genérico "Selecione um diretório"; `PickFile`/`PickDir` mantiveram as assinaturas antigas e passaram a delegar para as novas com uma mensagem padrão.
+
 ## Fluxo para Adicionar Uma Ferramenta Nova
 
 ### Passo 1: Gerar esqueleto
@@ -489,6 +504,10 @@ path, err := config.ProfilePath(toolID, name)
 // ❌ Errado (path traversal possível)
 path := filepath.Join(dir, name + ".yaml")
 ```
+
+### 7. Regex Multi-linha sobre Texto de OCR Exige `(?s)`
+
+Em Go, `.` na expressão regular **não casa quebra de linha** por padrão. Texto vindo de OCR quebra linha o tempo todo, então qualquer regex que precise atravessar linhas precisa do prefixo `(?s)` (modo "dotall"). Caso real medido em `organize-pdf`: `MATRÍCULA.*?(\d{6,})` não casava contra texto de OCR; `(?s)MATRÍCULA.*?(\d{6,})` casou e classificou o arquivo corretamente. Sintoma no terreno: a regex "parece certa" (funciona num editor de regex genérico, que costuma ligar dotall por padrão) mas não casa nada dentro da ferramenta — o usuário desconfia de bug antes de suspeitar da própria regex.
 
 ## Exploração Adicional
 

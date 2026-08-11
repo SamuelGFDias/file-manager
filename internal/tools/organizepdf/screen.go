@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,16 @@ import (
 // nível e testar de novo antes de aplicar, para proteger contra laço
 // infinito.
 const maxCalibrationCycles = 10
+
+// maxSourceDirAttempts e maxSampleAttempts limitam, respectivamente, quantas
+// vezes o usuário pode escolher de novo a pasta de origem (quando ela não
+// tem PDF nenhum) e o arquivo de amostra (quando ele avisa que a amostra
+// está fora da pasta de origem e recusa continuar assim mesmo), para
+// proteger contra laço infinito.
+const (
+	maxSourceDirAttempts = 5
+	maxSampleAttempts    = 5
+)
 
 // screen é a tela interativa da ferramenta organize-pdf.
 type screen struct {
@@ -110,13 +121,20 @@ func (t *Tool) askProfileOrConfigureNow() error {
 // É reusada tanto pela tela interativa (screen.Run, antes do ciclo de
 // teste) quanto por Profile().Edit, ao reeditar um perfil salvo.
 func (t *Tool) configure() (sampleText string, err error) {
-	inputDir, err := filepicker.PickDir(".")
+	inputDir, pdfCount, err := t.pickInputDir()
 	if err != nil {
 		return "", err
 	}
 	t.opts.InputDir = inputDir
 
-	outputDir, err := filepicker.PickDir(".")
+	// Continua a navegação a partir da pasta de origem recém-selecionada, em
+	// vez de reabrir em "." (diretório de trabalho do processo — na prática
+	// a pasta onde o executável foi deixado). Na esmagadora maioria dos
+	// casos o destino é a mesma pasta, uma irmã ou uma subpasta dela.
+	outputDir, err := filepicker.PickDirWithPrompt(
+		inputDir,
+		"Selecione a PASTA DE DESTINO (onde a estrutura será criada)",
+	)
 	if err != nil {
 		return "", err
 	}
@@ -126,7 +144,7 @@ func (t *Tool) configure() (sampleText string, err error) {
 		return "", err
 	}
 
-	samplePath, err := filepicker.PickFile(t.opts.InputDir, []string{".pdf"})
+	samplePath, err := t.pickSample()
 	if err != nil {
 		return "", err
 	}
@@ -160,7 +178,173 @@ func (t *Tool) configure() (sampleText string, err error) {
 		return "", err
 	}
 
+	t.showConfigSummary(pdfCount)
+
 	return text, nil
+}
+
+// pickInputDir pergunta a pasta de origem e barra a seleção enquanto ela não
+// tiver nenhum PDF: sem isso o usuário percorre toda a calibração para só no
+// fim descobrir, com "0 de 0 arquivos organizados", que escolheu a pasta
+// errada — foi exatamente esse o bug relatado. Limitado a
+// maxSourceDirAttempts tentativas para proteger contra laço infinito.
+//
+// O primeiro prompt começa em "." (é o primeiro, não há contexto anterior).
+// Se a pasta escolhida não tiver PDF e o usuário optar por tentar de novo, o
+// próximo prompt continua da pasta que ele acabou de tentar, não do zero —
+// senão ele reprova exatamente o mesmo caminho de navegação de novo.
+func (t *Tool) pickInputDir() (dir string, pdfCount int, err error) {
+	start := "."
+	for attempt := 0; attempt < maxSourceDirAttempts; attempt++ {
+		dir, err = filepicker.PickDirWithPrompt(
+			start,
+			"Selecione a PASTA DE ORIGEM (onde estão os PDFs a organizar)",
+		)
+		if err != nil {
+			return "", 0, err
+		}
+		start = dir // se for preciso tentar de novo, continua daqui
+
+		count, countErr := countPDFs(dir)
+		if countErr != nil {
+			return "", 0, countErr
+		}
+
+		if count > 0 {
+			ui.Infof("%d PDFs encontrados na pasta de origem.", count)
+			return dir, count, nil
+		}
+
+		absDir, absErr := filepath.Abs(dir)
+		if absErr != nil {
+			absDir = dir
+		}
+		ui.Warnf("a pasta selecionada (%s) não contém nenhum arquivo PDF.", absDir)
+
+		choice := ""
+		if err := survey.AskOne(&survey.Select{
+			Message: "O que deseja fazer?",
+			Options: []string{"Escolher outra pasta", "Cancelar"},
+		}, &choice); err != nil {
+			return "", 0, err
+		}
+		if choice == "Cancelar" {
+			return "", 0, filepicker.ErrCancelled
+		}
+		// "Escolher outra pasta": tenta de novo.
+	}
+
+	return "", 0, filepicker.ErrCancelled
+}
+
+// pickSample pergunta o PDF de amostra e avisa quando ele está fora da pasta
+// de origem: calibrar contra um documento que não faz parte do lote a
+// processar é legítimo (o usuário pode ter um exemplar representativo
+// guardado em outro lugar), mas fazer isso sem perceber foi a causa raiz do
+// bug relatado — o seletor de amostra abre a partir da pasta de origem, mas
+// nada impede de navegar para fora dela. Limitado a maxSampleAttempts
+// tentativas para proteger contra laço infinito.
+func (t *Tool) pickSample() (string, error) {
+	for attempt := 0; attempt < maxSampleAttempts; attempt++ {
+		samplePath, err := filepicker.PickFileWithPrompt(
+			t.opts.InputDir,
+			"Selecione um PDF de AMOSTRA (usado só para calibrar as regras)",
+			[]string{".pdf"},
+		)
+		if err != nil {
+			return "", err
+		}
+
+		outside, outsideErr := sampleOutsideInput(samplePath, t.opts.InputDir)
+		if outsideErr != nil {
+			return "", outsideErr
+		}
+		if !outside {
+			return samplePath, nil
+		}
+
+		ui.Warnf(
+			"o PDF de amostra escolhido (%s) não está dentro da pasta de origem (%s); "+
+				"as regras serão calibradas contra um documento que não faz parte do lote a processar.",
+			samplePath, t.opts.InputDir,
+		)
+
+		useAnyway := false
+		if err := survey.AskOne(&survey.Confirm{
+			Message: "Deseja continuar mesmo assim?",
+			Default: false,
+		}, &useAnyway); err != nil {
+			return "", err
+		}
+		if useAnyway {
+			return samplePath, nil
+		}
+		// Recusou: escolhe a amostra de novo.
+	}
+
+	return "", filepicker.ErrCancelled
+}
+
+// showConfigSummary mostra, antes do ciclo de teste de calibragem, um
+// resumo com a pasta de origem, quantos PDFs foram encontrados nela, a
+// pasta de destino e se a operação vai copiar ou mover. É a última chance
+// do usuário perceber que selecionou a pasta errada antes de qualquer
+// processamento.
+func (t *Tool) showConfigSummary(pdfCount int) {
+	inputAbs, err := filepath.Abs(t.opts.InputDir)
+	if err != nil {
+		inputAbs = t.opts.InputDir
+	}
+	outputAbs, err := filepath.Abs(t.opts.OutputDir)
+	if err != nil {
+		outputAbs = t.opts.OutputDir
+	}
+
+	action := "copiados"
+	if t.opts.Move {
+		action = "movidos"
+	}
+
+	ui.Infof(
+		"Resumo: %d PDFs em %s serão %s para %s.",
+		pdfCount, inputAbs, action, outputAbs,
+	)
+}
+
+// countPDFs devolve quantos arquivos PDF há no diretório.
+func countPDFs(dir string) (int, error) {
+	entries, err := filepicker.ListDir(dir, []string{".pdf"})
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, e := range entries {
+		if !e.IsDir {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// sampleOutsideInput informa se o arquivo de amostra está fora da pasta de
+// origem. Compara caminhos absolutos e limpos dos dois lados — comparar
+// strings cruas falharia com "./pasta" versus "/home/x/pasta" apontando
+// para o mesmo lugar.
+func sampleOutsideInput(samplePath, inputDir string) (bool, error) {
+	sampleAbs, err := filepath.Abs(samplePath)
+	if err != nil {
+		return false, fmt.Errorf("erro ao obter caminho absoluto de %s: %w", samplePath, err)
+	}
+	sampleDir := filepath.Clean(filepath.Dir(sampleAbs))
+
+	inputAbs, err := filepath.Abs(inputDir)
+	if err != nil {
+		return false, fmt.Errorf("erro ao obter caminho absoluto de %s: %w", inputDir, err)
+	}
+	inputAbs = filepath.Clean(inputAbs)
+
+	return sampleDir != inputAbs, nil
 }
 
 // configureLevels laça perguntando se o usuário quer adicionar mais um

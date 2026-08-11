@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/AlecAivazis/survey/v2/terminal"
@@ -21,6 +22,63 @@ type Entry struct {
 
 // ErrCancelled é devolvido quando o usuário aborta a seleção.
 var ErrCancelled = errors.New("filepicker: seleção cancelada")
+
+// lastDirMu protege lastDir, a memória (em nível de pacote) do último
+// diretório em que uma seleção de arquivo ou pasta foi concluída com
+// sucesso. Existe para que, sem um start explícito, um seletor não abra
+// sempre no diretório de trabalho do processo — que na prática costuma ser
+// a pasta onde o executável foi deixado, quase nunca a pasta que o usuário
+// quer navegar.
+var (
+	lastDirMu sync.Mutex
+	lastDir   string
+)
+
+// LastDir devolve o último diretório em que uma seleção (de arquivo ou
+// pasta) foi concluída com sucesso por PickDir, PickDirWithPrompt, PickFile
+// ou PickFileWithPrompt, ou "" se nenhuma seleção foi concluída ainda.
+func LastDir() string {
+	lastDirMu.Lock()
+	defer lastDirMu.Unlock()
+	return lastDir
+}
+
+// ResetLastDir limpa a memória de último diretório. Existe principalmente
+// para os testes isolarem estado entre casos — sem isso, um teste
+// contaminaria o próximo.
+func ResetLastDir() {
+	lastDirMu.Lock()
+	defer lastDirMu.Unlock()
+	lastDir = ""
+}
+
+// setLastDir registra dir como o último diretório em que uma seleção foi
+// concluída com sucesso. Seguro para chamada concorrente.
+func setLastDir(dir string) {
+	lastDirMu.Lock()
+	defer lastDirMu.Unlock()
+	lastDir = dir
+}
+
+// resolveStart decide o diretório de partida efetivo de uma navegação.
+//
+// Um start explícito e não-vazio SEMPRE vence: a memória de último
+// diretório (LastDir) só entra em jogo quando o chamador passa "". Isso é
+// proposital — a memória não deve sobrescrever silenciosamente um start
+// explícito, o que tornaria o comportamento imprevisível para quem chama
+// (ex: um fluxo que encadeia origem → destino → amostra passando o
+// diretório anterior como start precisa que esse valor seja respeitado à
+// risca). Com start vazio e sem memória ainda registrada, cai no diretório
+// de trabalho atual — o comportamento histórico.
+func resolveStart(start string) (string, error) {
+	if start != "" {
+		return normalizePath(start)
+	}
+	if ld := LastDir(); ld != "" {
+		return normalizePath(ld)
+	}
+	return normalizePath("")
+}
 
 // ListDir devolve as entradas de dir: subdiretórios primeiro (ordenados por nome),
 // depois os arquivos que casem com exts (ordenados por nome).
@@ -89,8 +147,17 @@ func ListDir(dir string, exts []string) ([]Entry, error) {
 }
 
 // PickFile navega a partir de start e devolve o caminho absoluto de UM arquivo escolhido.
+// Usa uma mensagem genérica; para um rótulo específico do contexto de uso, veja PickFileWithPrompt.
 func PickFile(start string, exts []string) (string, error) {
-	cur, err := normalizePath(start)
+	return PickFileWithPrompt(start, "Navegue até o arquivo desejado", exts)
+}
+
+// PickFileWithPrompt navega a partir de start e devolve o caminho absoluto de
+// UM arquivo escolhido, exibindo prompt como mensagem (seguida do diretório
+// atual) — útil para deixar claro ao usuário o que está sendo escolhido
+// (origem, destino, amostra etc.) quando um fluxo encadeia várias seleções.
+func PickFileWithPrompt(start, prompt string, exts []string) (string, error) {
+	cur, err := resolveStart(start)
 	if err != nil {
 		return "", err
 	}
@@ -106,7 +173,7 @@ func PickFile(start string, exts []string) (string, error) {
 		selected := ""
 		promptErr := survey.AskOne(
 			&survey.Select{
-				Message: fmt.Sprintf("Navegue até o arquivo desejado\nDiretório atual: %s", cur),
+				Message: fmt.Sprintf("%s\nDiretório atual: %s", prompt, cur),
 				Options: options,
 			},
 			&selected,
@@ -134,6 +201,7 @@ func PickFile(start string, exts []string) (string, error) {
 					cur = e.Path
 					break
 				}
+				setLastDir(cur)
 				return e.Path, nil
 			}
 		}
@@ -272,8 +340,17 @@ func PickFiles(start string, exts []string) ([]string, error) {
 }
 
 // PickDir navega a partir de start e devolve o caminho absoluto de um DIRETÓRIO escolhido.
+// Usa uma mensagem genérica; para um rótulo específico do contexto de uso, veja PickDirWithPrompt.
 func PickDir(start string) (string, error) {
-	cur, err := normalizePath(start)
+	return PickDirWithPrompt(start, "Selecione um diretório")
+}
+
+// PickDirWithPrompt navega a partir de start e devolve o caminho absoluto de
+// um DIRETÓRIO escolhido, exibindo prompt como mensagem (seguida do
+// diretório atual) — útil para deixar claro ao usuário o que está sendo
+// escolhido (origem, destino etc.) quando um fluxo encadeia várias seleções.
+func PickDirWithPrompt(start, prompt string) (string, error) {
+	cur, err := resolveStart(start)
 	if err != nil {
 		return "", err
 	}
@@ -304,7 +381,7 @@ func PickDir(start string) (string, error) {
 		selected := ""
 		promptErr := survey.AskOne(
 			&survey.Select{
-				Message: fmt.Sprintf("Selecione um diretório\nDiretório atual: %s", cur),
+				Message: fmt.Sprintf("%s\nDiretório atual: %s", prompt, cur),
 				Options: options,
 			},
 			&selected,
@@ -322,6 +399,7 @@ func PickDir(start string) (string, error) {
 		}
 
 		if selected == "[ Selecionar esta pasta ]" {
+			setLastDir(cur)
 			return cur, nil
 		}
 

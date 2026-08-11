@@ -1,6 +1,8 @@
 package organizepdf
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -311,5 +313,121 @@ func TestProfileEmpty(t *testing.T) {
 	}
 	if empty.Move != false {
 		t.Error("Empty().Move deveria ser false")
+	}
+}
+
+// TestCountPDFsWithFilesAndSubdir é o caso do bug relatado: uma pasta com
+// PDFs, um arquivo não-PDF e uma subpasta deve contar só os PDFs.
+func TestCountPDFsWithFilesAndSubdir(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(dir, "a.pdf"), []byte("pdf"), 0o644); err != nil {
+		t.Fatalf("erro ao criar a.pdf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.pdf"), []byte("pdf"), 0o644); err != nil {
+		t.Fatalf("erro ao criar b.pdf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notas.txt"), []byte("txt"), 0o644); err != nil {
+		t.Fatalf("erro ao criar notas.txt: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "subpasta"), 0o755); err != nil {
+		t.Fatalf("erro ao criar subpasta: %v", err)
+	}
+
+	count, err := countPDFs(dir)
+	if err != nil {
+		t.Fatalf("countPDFs() erro inesperado: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("countPDFs() = %d, want 2", count)
+	}
+}
+
+// TestCountPDFsEmptyDir reproduz exatamente o bug relatado: pasta de origem
+// sem nenhum PDF (ex: o usuário escolheu por engano o diretório do próprio
+// executável) deve contar 0, sem erro — é isso que a correção 2 usa para
+// barrar o fluxo antes da calibração.
+func TestCountPDFsEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+
+	count, err := countPDFs(dir)
+	if err != nil {
+		t.Fatalf("countPDFs() erro inesperado: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("countPDFs() = %d, want 0", count)
+	}
+}
+
+func TestCountPDFsNonexistentDirErrors(t *testing.T) {
+	_, err := countPDFs(filepath.Join(t.TempDir(), "nao-existe"))
+	if err == nil {
+		t.Fatal("countPDFs() com diretório inexistente deveria devolver erro")
+	}
+}
+
+// TestSampleOutsideInputSampleInside cobre o caso normal: amostra dentro da
+// pasta de origem, sem aviso.
+func TestSampleOutsideInputSampleInside(t *testing.T) {
+	dir := t.TempDir()
+	samplePath := filepath.Join(dir, "amostra.pdf")
+	if err := os.WriteFile(samplePath, []byte("pdf"), 0o644); err != nil {
+		t.Fatalf("erro ao criar amostra.pdf: %v", err)
+	}
+
+	outside, err := sampleOutsideInput(samplePath, dir)
+	if err != nil {
+		t.Fatalf("sampleOutsideInput() erro inesperado: %v", err)
+	}
+	if outside {
+		t.Error("sampleOutsideInput() = true, want false (amostra está dentro da pasta de origem)")
+	}
+}
+
+// TestSampleOutsideInputSampleOutside reproduz o cenário relatado pelo
+// usuário: amostra escolhida numa pasta diferente da origem (ex: ~/Downloads
+// enquanto a origem era ~/.file_manager).
+func TestSampleOutsideInputSampleOutside(t *testing.T) {
+	inputDir := t.TempDir()
+	otherDir := t.TempDir()
+	samplePath := filepath.Join(otherDir, "amostra.pdf")
+	if err := os.WriteFile(samplePath, []byte("pdf"), 0o644); err != nil {
+		t.Fatalf("erro ao criar amostra.pdf: %v", err)
+	}
+
+	outside, err := sampleOutsideInput(samplePath, inputDir)
+	if err != nil {
+		t.Fatalf("sampleOutsideInput() erro inesperado: %v", err)
+	}
+	if !outside {
+		t.Error("sampleOutsideInput() = false, want true (amostra está fora da pasta de origem)")
+	}
+}
+
+// TestSampleOutsideInputMixedRelativeAndAbsolutePaths é o caso que uma
+// comparação ingênua de strings erraria: caminhos relativo e absoluto
+// apontando para o mesmo diretório devem ser reconhecidos como iguais.
+func TestSampleOutsideInputMixedRelativeAndAbsolutePaths(t *testing.T) {
+	dir := t.TempDir()
+	samplePath := filepath.Join(dir, "amostra.pdf")
+	if err := os.WriteFile(samplePath, []byte("pdf"), 0o644); err != nil {
+		t.Fatalf("erro ao criar amostra.pdf: %v", err)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("erro ao obter diretório de trabalho: %v", err)
+	}
+	rel, err := filepath.Rel(wd, dir)
+	if err != nil {
+		t.Fatalf("erro ao calcular caminho relativo: %v", err)
+	}
+
+	outside, err := sampleOutsideInput(samplePath, rel)
+	if err != nil {
+		t.Fatalf("sampleOutsideInput() erro inesperado: %v", err)
+	}
+	if outside {
+		t.Error("sampleOutsideInput() = true, want false (mesmo diretório, só que um dos lados é relativo)")
 	}
 }

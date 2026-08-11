@@ -220,6 +220,8 @@ Sem o Tesseract instalado, a ferramenta continua funcionando normalmente para PD
 
 **Precisão:** o reconhecimento de caracteres não é perfeito (ex.: `ESCOLA` pode ser lido como `ESCO`, `0` pode ser confundido com `O`). Ao escrever regex para conteúdo que pode ter passado por OCR, prefira padrões tolerantes a esse tipo de erro em vez de casamentos exatos.
 
+**Regex que atravessa linhas precisa de `(?s)`:** em Go, `.` não casa quebra de linha por padrão — e texto de OCR quebra linha o tempo todo. Se sua regex (em `--level` ou `--filename-regex`) precisa que `.` atravesse uma quebra de linha, use o prefixo `(?s)`. Exemplo real: `MATRÍCULA.*?(\d{6,})` não casava contra um PDF digitalizado; `(?s)MATRÍCULA.*?(\d{6,})` casou. Sem esse prefixo, a regex parece certa (funciona em testadores de regex genéricos, que costumam ligar esse modo por padrão) mas simplesmente não encontra nada dentro da ferramenta.
+
 ## Limitações conhecidas
 
 Para PDFs digitalizados sem o Tesseract instalado (ou com `--ocr never`), os modos que dependem de regex sobre o conteúdo não funcionam. Use modos baseados em metadados ou estrutura do arquivo (ex: `split-pdf --mode page`) ou instale o Tesseract conforme a seção OCR acima.

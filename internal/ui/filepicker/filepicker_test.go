@@ -3,6 +3,7 @@ package filepicker
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -201,4 +202,181 @@ func TestListDir_NonexistentDirectory(t *testing.T) {
 	if err == nil {
 		t.Errorf("esperava erro ao ler diretório inexistente, mas obteve nil")
 	}
+}
+
+// TestListDir_CountFilesVsDirs cobre a contagem de arquivos versus
+// diretórios que a correção de "pasta de origem sem PDFs" do organize-pdf
+// depende: ListDir(dir, []string{".pdf"}) deve devolver os subdiretórios
+// (todos, sem filtro de extensão) mais só os arquivos .pdf, e contar
+// entradas com IsDir == false deve bater com a quantidade real de PDFs.
+func TestListDir_CountFilesVsDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	os.Mkdir(filepath.Join(tmpDir, "subpasta1"), 0755)
+	os.Mkdir(filepath.Join(tmpDir, "subpasta2"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "a.pdf"), []byte("pdf"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "b.pdf"), []byte("pdf"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "c.pdf"), []byte("pdf"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "notas.txt"), []byte("txt"), 0644)
+
+	entries, err := ListDir(tmpDir, []string{".pdf"})
+	if err != nil {
+		t.Fatalf("ListDir devolveu erro: %v", err)
+	}
+
+	var dirCount, fileCount int
+	for _, e := range entries {
+		if e.IsDir {
+			dirCount++
+		} else {
+			fileCount++
+		}
+	}
+
+	if dirCount != 2 {
+		t.Errorf("esperava 2 diretórios, obteve %d", dirCount)
+	}
+	if fileCount != 3 {
+		t.Errorf("esperava 3 arquivos .pdf, obteve %d", fileCount)
+	}
+}
+
+// TestListDir_EmptyDirectoryReturnsZeroFiles cobre o caso de pasta de
+// origem vazia: nenhuma entrada, nenhum erro.
+func TestListDir_EmptyDirectoryReturnsZeroFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	entries, err := ListDir(tmpDir, []string{".pdf"})
+	if err != nil {
+		t.Fatalf("ListDir devolveu erro: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("esperava 0 entradas em diretório vazio, obteve %d", len(entries))
+	}
+}
+
+// TestPickFileSignatureUnchanged trava, em tempo de compilação, que PickFile
+// mantém a assinatura original — outras ferramentas (mergepdf, splitpdf)
+// dependem dela e não podem quebrar com a introdução de PickFileWithPrompt.
+func TestPickFileSignatureUnchanged(t *testing.T) {
+	var _ func(start string, exts []string) (string, error) = PickFile
+}
+
+// TestPickDirSignatureUnchanged trava, em tempo de compilação, que PickDir
+// mantém a assinatura original — outras ferramentas dependem dela e não
+// podem quebrar com a introdução de PickDirWithPrompt.
+func TestPickDirSignatureUnchanged(t *testing.T) {
+	var _ func(start string) (string, error) = PickDir
+}
+
+// TestSetLastDirAndLastDir cobre o registro básico: sem nenhuma seleção
+// concluída, LastDir() é ""; depois de setLastDir, LastDir() reflete o
+// valor registrado.
+func TestSetLastDirAndLastDir(t *testing.T) {
+	ResetLastDir()
+	defer ResetLastDir()
+
+	if got := LastDir(); got != "" {
+		t.Fatalf("LastDir() antes de qualquer seleção = %q, want \"\"", got)
+	}
+
+	setLastDir("/tmp/algum/lugar")
+
+	if got := LastDir(); got != "/tmp/algum/lugar" {
+		t.Errorf("LastDir() = %q, want %q", got, "/tmp/algum/lugar")
+	}
+}
+
+// TestResetLastDirClearsState garante que ResetLastDir realmente limpa a
+// memória — os testes dependem disso para não se contaminarem uns aos
+// outros.
+func TestResetLastDirClearsState(t *testing.T) {
+	setLastDir("/tmp/outro/lugar")
+	ResetLastDir()
+
+	if got := LastDir(); got != "" {
+		t.Errorf("LastDir() após ResetLastDir() = %q, want \"\"", got)
+	}
+}
+
+// TestResolveStartExplicitStartWinsOverMemory é a regra mais importante da
+// memória de último diretório: um start explícito e não-vazio nunca pode
+// ser silenciosamente trocado pela memória.
+func TestResolveStartExplicitStartWinsOverMemory(t *testing.T) {
+	ResetLastDir()
+	defer ResetLastDir()
+
+	tmpDir := t.TempDir()
+	otherDir := t.TempDir()
+	setLastDir(otherDir)
+
+	got, err := resolveStart(tmpDir)
+	if err != nil {
+		t.Fatalf("resolveStart() erro inesperado: %v", err)
+	}
+	want, _ := filepath.Abs(tmpDir)
+	if got != want {
+		t.Errorf("resolveStart(%q) = %q, want %q (start explícito deveria vencer a memória)", tmpDir, got, want)
+	}
+}
+
+// TestResolveStartEmptyUsesMemoryWhenPresent cobre o caso que motivou a
+// memória: start vazio deve continuar da última pasta visitada.
+func TestResolveStartEmptyUsesMemoryWhenPresent(t *testing.T) {
+	ResetLastDir()
+	defer ResetLastDir()
+
+	tmpDir := t.TempDir()
+	setLastDir(tmpDir)
+
+	got, err := resolveStart("")
+	if err != nil {
+		t.Fatalf("resolveStart() erro inesperado: %v", err)
+	}
+	want, _ := filepath.Abs(tmpDir)
+	if got != want {
+		t.Errorf("resolveStart(\"\") = %q, want %q (deveria usar a memória)", got, want)
+	}
+}
+
+// TestResolveStartEmptyWithoutMemoryFallsBackToWorkingDir cobre o
+// comportamento histórico: sem start e sem memória ainda registrada, cai no
+// diretório de trabalho atual.
+func TestResolveStartEmptyWithoutMemoryFallsBackToWorkingDir(t *testing.T) {
+	ResetLastDir()
+	defer ResetLastDir()
+
+	got, err := resolveStart("")
+	if err != nil {
+		t.Fatalf("resolveStart() erro inesperado: %v", err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("erro ao obter diretório de trabalho: %v", err)
+	}
+	if got != wd {
+		t.Errorf("resolveStart(\"\") sem memória = %q, want %q (diretório de trabalho atual)", got, wd)
+	}
+}
+
+// TestSetLastDirConcurrentNoRace cobre chamadas concorrentes ao registro de
+// último diretório: a suíte roda com -race, então qualquer acesso
+// desprotegido a lastDir seria detectado aqui.
+func TestSetLastDirConcurrentNoRace(t *testing.T) {
+	ResetLastDir()
+	defer ResetLastDir()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			setLastDir("/tmp/concorrente")
+		}()
+		go func() {
+			defer wg.Done()
+			_ = LastDir()
+		}()
+	}
+	wg.Wait()
 }
