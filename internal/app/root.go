@@ -245,11 +245,7 @@ func newProfilesImportCommand() *cobra.Command {
 
 			empty := match.Profile().Empty()
 			if err := imported.Node.Decode(empty); err != nil {
-				return fmt.Errorf(
-					"o conteúdo do perfil no arquivo %q não é compatível com as opções de %q "+
-						"(arquivo corrompido ou de versão incompatível): %w",
-					file, imported.Tool, err,
-				)
+				return config.DecodeError(imported.Tool, file, err)
 			}
 
 			if err := config.ImportProfile(imported, target, force); err != nil {

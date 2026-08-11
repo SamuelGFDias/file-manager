@@ -4,6 +4,8 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -206,6 +208,63 @@ func TestProfilesImportCommandFlags(t *testing.T) {
 
 	if !isRequiredFlag(importCmd, "file") {
 		t.Errorf("flag --file de profiles import deveria ser obrigatória")
+	}
+}
+
+// TestProfilesImportCommandDecodeErrorIsUserFriendly reproduz o caso
+// relatado pelo coordenador: um arquivo com "tool: organize-pdf" e
+// "data.levels" sendo uma string em vez de lista. Antes da correção, a
+// mensagem de erro devolvida ao usuário era o erro cru do decodificador de
+// YAML ("cannot unmarshal !!str ... into []organizepdf.LevelSpec"), em
+// inglês e citando um tipo interno do Go — incompreensível para quem
+// recebeu o arquivo por e-mail e só quer saber se pode importar ou não. A
+// mensagem final precisa nomear a ferramenta e o arquivo, explicar as
+// causas comuns em português, sugerir pedir um novo arquivo a quem enviou,
+// e ainda assim preservar o erro original (encapsulado com %w) para quem
+// for depurar.
+func TestProfilesImportCommandDecodeErrorIsUserFriendly(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "perfil-incompativel.yaml")
+	content := "name: teste\ntool: organize-pdf\ndata:\n  levels: \"isso deveria ser uma lista\"\n"
+	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+		t.Fatalf("falha ao preparar arquivo de teste: %v", err)
+	}
+
+	cmd := NewRootCommand(Version{Version: "0.1.0", Commit: "abc1234", Date: "2026-08-11T12:00:00Z"})
+	cmd.SetArgs([]string{"profiles", "import", "--file", file})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("esperava erro ao importar perfil com \"data\" incompatível")
+	}
+
+	msg := err.Error()
+
+	// A mensagem principal precisa ser compreensível para quem não é
+	// desenvolvedor: cita a ferramenta e o arquivo, explica as causas
+	// comuns, e sugere o que fazer.
+	for _, want := range []string{
+		"organize-pdf",
+		file,
+		"corrompido",
+		"editado à mão",
+		"versão diferente",
+		"exportá-lo novamente",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("mensagem de erro deveria conter %q; got: %s", want, msg)
+		}
+	}
+
+	// O erro cru do decodificador não pode ter desaparecido: precisa
+	// continuar acessível para quem for depurar, encapsulado com %w.
+	if errors.Unwrap(err) == nil {
+		t.Fatalf("erro deveria encapsular o erro original do decodificador via %%w; got: %v", err)
+	}
+	if !strings.Contains(msg, "detalhe técnico") {
+		t.Errorf("mensagem deveria expor o erro original numa segunda linha \"detalhe técnico:\"; got: %s", msg)
 	}
 }
 

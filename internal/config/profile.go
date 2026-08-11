@@ -234,6 +234,28 @@ type ImportedProfile struct {
 	Node yaml.Node
 }
 
+// DecodeError envolve o erro devolvido por ImportedProfile.Node.Decode()
+// numa mensagem compreensível para quem não é desenvolvedor: quem recebe um
+// arquivo de perfil por e-mail e tenta importar é exatamente a pessoa que
+// não faz ideia do que significa um erro cru do decodificador de YAML
+// (texto em inglês, citando um tipo interno do Go como
+// "[]organizepdf.LevelSpec"). A mensagem principal nomeia a ferramenta e o
+// arquivo, explica as causas mais comuns — arquivo corrompido, editado à
+// mão de forma incorreta, ou gerado por uma versão diferente do
+// file-manager — e sugere pedir um novo arquivo a quem enviou. O erro
+// original continua acessível a quem for depurar via errors.Unwrap/Is
+// (encapsulado com %w) e aparece numa segunda linha, prefixada "detalhe
+// técnico:", para não sumir da mensagem.
+func DecodeError(toolID, path string, err error) error {
+	return fmt.Errorf(
+		"o conteúdo do perfil no arquivo %q não é compatível com a ferramenta %q. Isso costuma "+
+			"acontecer quando o arquivo está corrompido, foi editado à mão de forma incorreta, ou "+
+			"foi exportado por uma versão diferente do file-manager. Peça a quem enviou o arquivo "+
+			"para exportá-lo novamente.\ndetalhe técnico: %w",
+		path, toolID, err,
+	)
+}
+
 // ReadProfileFile lê e valida a estrutura de um arquivo de perfil externo:
 // o arquivo precisa existir e ser um YAML de perfil válido, com os campos
 // "tool" e "name" preenchidos e "name" aprovado por ValidateName. As

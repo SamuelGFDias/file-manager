@@ -449,6 +449,26 @@ func TestImportProfileWithDifferentNameWritesUnderNewName(t *testing.T) {
 	}
 }
 
+func TestDecodeErrorIsUserFriendlyAndWrapsOriginal(t *testing.T) {
+	original := errors.New("cannot unmarshal !!str `abc` into []organizepdf.LevelSpec")
+
+	err := DecodeError("organize-pdf", "/tmp/perfil.yaml", original)
+	if err == nil {
+		t.Fatalf("DecodeError não deveria devolver nil")
+	}
+
+	msg := err.Error()
+	for _, want := range []string{"organize-pdf", "/tmp/perfil.yaml", "corrompido", "editado à mão", "versão diferente"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("mensagem deveria conter %q; got: %s", want, msg)
+		}
+	}
+
+	if !errors.Is(err, original) {
+		t.Fatalf("DecodeError deveria encapsular o erro original com %%w (errors.Is falhou)")
+	}
+}
+
 // encodeNode codifica v num yaml.Node, para montar ImportedProfile.Node nos
 // testes sem depender de um arquivo real em disco.
 func encodeNode(t *testing.T, v any) yaml.Node {

@@ -522,11 +522,7 @@ func (s *screen) doImport(t tool.Tool) {
 
 	empty := t.Profile().Empty()
 	if err := imported.Node.Decode(empty); err != nil {
-		ui.Errorf(
-			"o conteúdo do arquivo não é compatível com as opções de %q (arquivo corrompido ou de "+
-				"versão incompatível): %v",
-			t.Meta().Title, err,
-		)
+		ui.Errorf("%v", config.DecodeError(imported.Tool, file, err))
 		ui.Pause()
 		return
 	}
