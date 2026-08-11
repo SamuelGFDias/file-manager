@@ -103,6 +103,20 @@ func NewRootCommand(v Version) *cobra.Command {
 	// command", em inglês) por uma versão em português — ver help.go.
 	root.SetHelpCommand(newHelpCommand(root))
 
+	// Traduz os RÓTULOS ESTRUTURAIS da ajuda ("Usage:", "Available
+	// Commands:", "Flags:", etc.) — ver usage.go para a cópia adaptada do
+	// template padrão do cobra e o raciocínio completo. Aplicado só na raiz
+	// de propósito: o cobra propaga o template do pai para todo comando
+	// filho que não registrar o seu próprio (Command.UsageTemplate sobe a
+	// árvore até achar um; nenhum comando deste CLI registra o seu), então
+	// todo subcomando herda automaticamente.
+	//
+	// O help template padrão do cobra (defaultHelpTemplate) não contém
+	// nenhum rótulo fixo em inglês — só encaixa .Long/.Short (já em
+	// português, vindos daqui) dentro de .UsageString (que já usa o
+	// usageTemplatePT acima) — por isso SetHelpTemplate não é necessário.
+	root.SetUsageTemplate(usageTemplatePT)
+
 	return root
 }
 
