@@ -7,7 +7,7 @@ Um conjunto de ferramentas de linha de comando para gerenciar, manipular e organ
 - **Módulo:** `github.com/SamuelGFDias/file-manager`
 - **Go:** 1.26.5
 - **Binário:** `file-manager` (entrypoint: `cmd/file-manager`)
-- **Ferramentas:** `merge-pdf`, `split-pdf`, `organize-pdf`
+- **Ferramentas:** `merge-pdf`, `split-pdf`, `organize-pdf`, `ocr-pdf`
 - **Libs principais:** cobra (CLI), survey/v2 (prompts), yaml.v3 (perfis), pdfcpu (manipulação), ledongthuc/pdf (extração de texto), fatih/color, mattn/go-isatty
 
 ## Estrutura de Pastas
@@ -30,7 +30,7 @@ internal/pdfutil/                 Núcleo: merge, split, organize, extração de
 internal/ocr/                     Wrapper do executável externo tesseract (não é binding CGO)
 internal/regexcalib/              Sugestão de regex a partir de valor de exemplo
 internal/selfupdate/              Auto-atualização: consulta release, compara versão, baixa e substitui o executável
-internal/tools/                   Uma subpasta por ferramenta (mergepdf/, splitpdf/, organizepdf/)
+internal/tools/                   Uma subpasta por ferramenta (mergepdf/, splitpdf/, organizepdf/, ocrpdf/)
 internal/testcli/                 Harness de teste ponta a ponta: abre o binário real num pty (linux only)
 e2e/                               Cenários de teste ponta a ponta (tag "e2e"; rodam via "make e2e")
 ```
@@ -299,6 +299,39 @@ O CLI tem dois públicos muito diferentes: o usuário final, não técnico, que 
 **Regra transversal, sem exceção: nenhuma função de completação propaga erro.** `config.List`, `history.List` e qualquer outra fonte de dados dentro de uma função de completação que devolva erro resulta em lista vazia + `cobra.ShellCompDirectiveNoFileComp`, nunca em erro repassado ou mensagem impressa. Um Tab que cospe erro no meio da linha de comando é pior, para quem está digitando, do que um Tab que simplesmente não completa nada — e completação roda toda vez que o usuário aperta Tab, então qualquer lentidão ou instabilidade ali é sentida imediatamente, ao contrário de um erro no corpo de um comando (que só aparece quando o usuário decide rodar de verdade).
 
 **`--profile` não existe hoje.** Um perfil salvo só é aplicado hoje pela tela interativa (`internal/ui/profiles/`); nenhum comando cobra tem uma flag `--profile` para aplicar um perfil diretamente por linha de comando. Se essa flag for adicionada no futuro, ela deveria ganhar completação dinâmica a partir de `config.List(<toolID>)`, seguindo o mesmo padrão de `profileToolCompletion`.
+
+### 18. PDF Pesquisável a partir de Digitalização (`ocr-pdf`, `internal/pdfutil/ocrize.go`)
+
+Até a v0.10.x, o OCR do CLI (Decisão 7) só servia para **leitura**: o texto reconhecido ficava em memória, usado uma única vez para casar uma regex, e o arquivo continuava sendo imagem — não pesquisável no Explorer do Windows nem em leitor de PDF, e cada execução reprocessava tudo do zero. `ocr-pdf` fecha essa lacuna: grava a camada de texto de volta no arquivo, gerando um PDF novo (nunca sobrescrevendo o original).
+
+**Viabilidade, medida antes de implementar (não reabrir essa investigação):** `tesseract <imagem> <saida> -l por pdf` gera um PDF de uma página com a imagem original e uma camada de texto invisível sobreposta — verificado processando o resultado com o próprio CLI em `--ocr never` e confirmando que a regex casou (o mesmo teste sobre o PDF escaneado original não casa nada, prova de que o texto está mesmo embutido, não é coincidência). Custo: ~0,9s por página. Custo de tamanho: um arquivo de 128 KB virou 241 KB — o Tesseract reescreve a imagem ao montar o PDF pesquisável, então o resultado é sempre maior que o original.
+
+**A limitação que define o desenho, e por quê a regra é conservadora.** A abordagem inteira reconstrói o PDF de saída a partir das imagens extraídas de cada página (a mesma extração que o fallback de OCR de leitura já usa — Decisão 7). Numa página puro-scan (uma única imagem, sem texto embutido), isso é fiel ao original. Numa página **mista** — imagem + texto nativo, vetores, ou mais de uma imagem — o conteúdo que não é aquela única imagem **seria descartado** silenciosamente. Por isso `DecideEligibility` recusa qualquer arquivo que tenha uma página fora do padrão "toda página é puro scan", em vez de processar parcialmente: destruir conteúdo em silêncio é sempre pior que recusar o arquivo com um motivo explícito. As decisões de eligibilidade, cada uma com seu motivo específico (ver `ocrize.go`, `DecideEligibility`):
+
+- Toda página `PagePureScan` (exatamente 1 imagem, sem texto) → elegível.
+- Qualquer página `PageMixed` (imagem + texto, ou ≥2 imagens) → recusado: reconstruir perderia esse conteúdo extra.
+- **Todas** as páginas já com texto (`PageHasText`) → recusado por **economia**, não por erro: o arquivo já é pesquisável, não há o que reconhecer.
+- Mistura de `PagePureScan` e `PageHasText` → recusado: só parte do arquivo é digitalizada, reconstruir perderia o texto das páginas restantes.
+- Alguma `PageNoImage` (nem imagem, nem texto) junto de páginas de scan → recusado, mesmo raciocínio.
+- Zero páginas → recusado.
+
+`ClassifyPages`/`DecideEligibility` são funções **puras** (sobre `[]string` de texto por página + `map[int]int` de contagem de imagens por página, sem tocar em PDF nenhum) — testáveis exaustivamente sem depender de tesseract nem de fixture de PDF real.
+
+**Motor de OCR→PDF declarado em `pdfutil`, não importado de `internal/ocr` — mesmo padrão de `OCREngine` (Decisão 7/textextract.go).** `SearchablePDFEngine` (`Available() bool`; `ImageToSearchablePDF(ctx, imagePath, outBase, lang) error`) é uma interface local a `ocrize.go`; `internal/ocr.Tesseract` ganhou o método `ImageToSearchablePDF` (roda `tesseract <img> <outBase> -l <lang> pdf`, produz `<outBase>.pdf`) que a satisfaz por duck typing, sem `pdfutil` precisar importar `internal/ocr`. Isso mantém o núcleo testável com um motor falso (`fakeSearchablePDFEngine` em `ocrize_test.go`, que grava um PDF mínimo real via a mesma fixture `buildTestPDF` dos testes de integração do pacote, em vez de rodar tesseract de verdade) — sem processo externo, sem rede, determinístico.
+
+**`OCRize` exige o motor disponível ANTES de processar qualquer coisa — inclusive em `--dry-run`.** Ao contrário do OCR de leitura (opcional, degrada silenciosamente sem o Tesseract), aqui o motor é o próprio propósito da ferramenta: simular sem o Tesseract instalado prometeria uma execução real que não vai funcionar. `internal/tools/ocrpdf` falha com `ocr.InstallHint()` antes de resolver qualquer entrada.
+
+**Ordenação por NÚMERO DE PÁGINA, nunca por nome de arquivo — armadilha real, testada explicitamente.** O nome do arquivo de imagem extraída pelo pdfcpu (`<base>_<página>_<prefixo><índice>.<ext>`) não ordena alfabeticamente na mesma sequência da numeração: para 10 páginas, `"..._1_..."` vem antes de `"..._10_..."`, que vem antes de `"..._2_..."`. `ocrizeOneFile` evita esse problema pela raiz: gera o PDF de cada página com um nome próprio, **zero-padded por número de página** (`pagina-%05d.pdf`), então mesmo a ordenação alfabética que `pdfutil.Merge`/`ResolveInputs` aplica por padrão (`Sort: "name"`) já corresponde à ordem numérica correta — não depende de acertar a ordenação de `Merge` para o caso geral, resolve no nome do arquivo temporário que a própria função controla. `TestOCRizePreservesPageOrderWithDoubleDigitPages` (`internal/pdfutil/ocrize_test.go`) constrói um PDF real de 10 páginas puro-scan e confere, lendo o texto embutido do arquivo final, que a página N contém o marcador da página N — é exatamente o caso (10 páginas) em que a ordenação textual ingênua erraria.
+
+**Nunca sobrescreve o original.** Destino = `<OutputDir ou pasta do original>/<nomeBase><Suffix>.pdf`; se o caminho calculado colidir com o próprio arquivo de origem (ex: `--suffix ""` sem `--output-dir`), a entrada é recusada com um motivo em vez de gravar por cima. Destino já existente: `--skip-existing` pula sem erro (pensado para retomar um lote grande interrompido — a ~0,9s/página, 200 documentos de 3 páginas levam quase 10 minutos), e sem `--overwrite` também pula — nunca falha o lote inteiro por causa de um arquivo.
+
+**Falha num arquivo nunca derruba o lote; cancelamento de contexto, sim.** `ocrizeOneFile` só devolve erro de verdade quando `ctx.Err()` dispara (checado entre arquivos E entre páginas, dentro do laço de geração por página — um lote grande precisa ser interrompível com Ctrl+C sem deixar lixo, já que cada `os.MkdirTemp` de arquivo tem `defer os.RemoveAll`). Qualquer outra falha (extração de imagem, OCR de uma página, `Merge` final) vira uma entrada em `Skipped` com o motivo, e `OCRize` segue para o próximo arquivo.
+
+**Relatório (`--report`) reaproveita o padrão da v0.6.0 (Decisão 15), com colunas próprias.** `BuildOCRizeReport`/`WriteOCRizeReportCSV` (`internal/pdfutil/ocrize.go`/`report.go`) seguem exatamente o mesmo BOM UTF-8 (`csvUTF8BOM`, reaproveitada, não duplicada) e ordenação determinística por nome de arquivo do relatório de `organize-pdf`, mas com colunas adequadas a esta ferramenta (`arquivo, origem, destino, processado, paginas, motivo` — `processado` em vez de `classificado`, `sim`/`nao`).
+
+**Progresso impresso arquivo a arquivo, indispensável no custo desta ferramenta.** `OCRizeOptions.Progress func(done, total int, path string)` é chamado uma vez por arquivo processado (elegível ou não). `internal/tools/ocrpdf` monta a linha (`formatProgressLine`, `command.go`) no formato `[3/120] nota-003.pdf — 2 página(s)...` — função pura, usada tanto pelo comando cobra (`fmt.Println`) quanto pela tela interativa (`ui.Infof`), para as duas nunca divergirem na redação. Sem isso, um lote de 200 documentos de 3 páginas (quase 10 minutos) pareceria travado.
+
+**Tela interativa sempre simula antes de aplicar — mesmo espírito do ciclo de teste de `organize-pdf` (Decisão 4/Dry-run compartilhado), sem a complexidade de calibração de regex que `organize-pdf` tem.** `internal/tools/ocrpdf/screen.go` roda `ocrizeRaw(dryRun=true, ...)` incondicionalmente, mostra quantos arquivos são elegíveis e quantos seriam pulados (com o motivo), e só então pergunta confirmação antes de rodar de verdade com `dryRun=false` — nunca toca em um arquivo sem que o usuário tenha visto o resultado da simulação primeiro. `ocrizeRaw` devolve tanto o `pdfutil.OCRizeResult` "cru" (para a tela decidir se há algo elegível a aplicar) quanto o `tool.Result` já formatado (usado pelo comando cobra, que não precisa inspecionar a contagem) — `tool.Result` só tem `Summary`/`Details` (strings), insuficiente para essa decisão.
 
 ## Fluxo para Adicionar Uma Ferramenta Nova
 

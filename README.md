@@ -130,6 +130,40 @@ file-manager organize-pdf -i ./invoices -o ./invoices_organized \
 
 Com zero `--level`, a ferramenta funciona como um renomeador em lote dos PDFs.
 
+### ocr-pdf
+
+Transforma um PDF digitalizado (imagem, sem camada de texto) num PDF **pesquisável de verdade**: o texto reconhecido por OCR é gravado de volta no arquivo, em vez de só usado em memória para casar uma expressão regular (que é o que `organize-pdf`/`split-pdf` fazem com a flag `--ocr`). O resultado abre pesquisável no Explorer do Windows, em qualquer leitor de PDF, e não precisa ser reprocessado a cada execução.
+
+| Flag | Tipo | Descrição |
+|------|------|-----------|
+| `-i, --input` | string (repetível) | Arquivo PDF ou pasta a processar (pode ser usado várias vezes) |
+| `--max-depth` | int | Profundidade ao varrer pastas: 0 = só a pasta, N = N níveis, -1 = ilimitado (default: 1) |
+| `-o, --output-dir` | string | Pasta de saída; vazio (default) grava cada resultado ao lado do original |
+| `--suffix` | string | Sufixo do arquivo gerado (default: `-ocr`) |
+| `--lang` | string | Idioma do OCR (ex: `por`, `eng`) (default: `por`) |
+| `--overwrite` | bool | Sobrescreve arquivos de saída já existentes |
+| `--skip-existing` | bool | Pula (sem erro) arquivos cuja saída já existe — útil para retomar um lote interrompido |
+| `--dry-run` | bool | Só classifica os arquivos e mostra o que seria feito, sem gerar nada |
+| `--report` | string | Caminho de um relatório CSV desta execução; vazio (default) = não gera |
+
+**Exemplos:**
+
+```bash
+file-manager ocr-pdf --input ./digitalizados --dry-run
+```
+
+```bash
+file-manager ocr-pdf -i ./digitalizados -o ./pesquisaveis --suffix _pesquisavel --lang eng
+```
+
+**A regra conservadora, e por quê.** ocr-pdf reconstrói o PDF de saída a partir das imagens extraídas de cada página — é assim que consegue gerar um arquivo novo com a camada de texto embutida. Isso é fiel ao original quando uma página é **puro scan** (exatamente uma imagem, sem nenhum texto embutido), mas seria **destrutivo** numa página mista (imagem + texto nativo, vetores, ou mais de uma imagem): reconstruir a partir só da imagem perderia esse conteúdo extra. Por isso a ferramenta só processa arquivos cujas páginas sejam **todas** puro scan, e recusa os demais com um motivo explícito — inclusive um arquivo que já tenha texto embutido em todas as páginas (recusado por economia: não há o que reconhecer). Destruir conteúdo em silêncio seria muito pior do que recusar o arquivo.
+
+**Custo medido:** ~0,9 segundo por página, e o arquivo gerado costuma ficar **maior** que o original — num teste real, 128 KB viraram 241 KB, porque o Tesseract reescreve a imagem ao montar o PDF pesquisável. Um lote de 200 documentos de 3 páginas leva quase 10 minutos, por isso o progresso é impresso arquivo a arquivo (`[3/200] nota-003.pdf — 3 página(s)...`) e o processo pode ser interrompido com Ctrl+C a qualquer momento sem deixar lixo.
+
+**O original nunca é sobrescrito:** a saída é sempre um arquivo novo, com `--suffix` (default `-ocr`), em `--output-dir` (ou ao lado do original quando vazio). Use `--dry-run` antes de rodar de verdade sobre um lote grande — mostra quantos arquivos são elegíveis e quantos seriam pulados (e por quê) sem gastar um único segundo de OCR.
+
+**Exige o Tesseract instalado** — ao contrário do OCR opcional de `organize-pdf`/`split-pdf` (que degrada normalmente sem ele), aqui é o próprio propósito da ferramenta: sem o Tesseract, `ocr-pdf` recusa rodar com um erro claro, mesmo em `--dry-run`. Ver a seção [OCR](#ocr) abaixo para instruções de instalação.
+
 ## Organizar a partir de uma planilha
 
 Até aqui a hierarquia de pastas sai do conteúdo de cada PDF, por regex. O caso inverso é comum: o usuário já tem uma planilha dizendo onde cada documento deve ser arquivado, e o PDF só precisa fornecer a **chave** para procurar nela.
@@ -398,6 +432,8 @@ Sem permissão de root, grave em `~/.local/share/bash-completion/completions/fil
 `split-pdf --mode regex` e `organize-pdf --level` classificam PDFs pelo conteúdo textual. Em um PDF digitalizado (imagem sem camada de texto), esse conteúdo não existe — por isso a ferramenta oferece OCR como alternativa: quando a página não tem texto embutido, a imagem da página é extraída e lida pelo [Tesseract](https://github.com/tesseract-ocr/tesseract).
 
 Controlado pelas flags `--ocr` (`auto`, `always` ou `never`; default `auto`, que só aciona o OCR quando a página não tem texto) e `--ocr-lang` (idioma, default `por`).
+
+Esse OCR é só para **leitura**: o texto reconhecido fica em memória, usado uma única vez para casar a regex, e o arquivo continua sendo imagem. Para gravar a camada de texto **de volta no arquivo** — tornando-o pesquisável de verdade, sem precisar reprocessar toda vez — use a ferramenta [`ocr-pdf`](#ocr-pdf).
 
 **Requer o Tesseract instalado no sistema** — não é embutido no binário:
 
