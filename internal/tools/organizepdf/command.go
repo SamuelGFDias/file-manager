@@ -177,6 +177,50 @@ func (t *Tool) params() []tool.Param {
 				fs.StringVar(&t.opts.ReportFormat, "report-format", t.opts.ReportFormat, `Formato do relatório gerado por --report: "csv" ou "json"`)
 			},
 		},
+		{
+			Name:        "csv",
+			Shorthand:   "",
+			Type:        "string",
+			Description: "Planilha que define a hierarquia de pastas de destino; vazio = hierarquia vem do conteúdo do PDF (--level). Incompatível com --level",
+			Default:     "",
+			Example:     `--csv ./planilha.csv --csv-key-regex "NOTA:\s*(\d+)"`,
+			BindFlag: func(fs *pflag.FlagSet) {
+				fs.StringVar(&t.opts.CSV, "csv", t.opts.CSV, "Planilha que define a hierarquia de pastas de destino; vazio = hierarquia vem do conteúdo do PDF (--level)")
+			},
+		},
+		{
+			Name:        "csv-key-regex",
+			Shorthand:   "",
+			Type:        "string",
+			Description: "Regex que extrai do PDF a chave usada para procurar a linha correspondente em --csv. Obrigatório junto com --csv",
+			Default:     "",
+			Example:     `NOTA:\s*(\d+)`,
+			BindFlag: func(fs *pflag.FlagSet) {
+				fs.StringVar(&t.opts.CSVKeyRegex, "csv-key-regex", t.opts.CSVKeyRegex, "Regex que extrai do PDF a chave usada para procurar a linha correspondente em --csv")
+			},
+		},
+		{
+			Name:        "csv-key-column",
+			Shorthand:   "",
+			Type:        "string",
+			Description: "Coluna da planilha (--csv) com a chave; vazio = primeira coluna do cabeçalho",
+			Default:     "",
+			Example:     "NOTA",
+			BindFlag: func(fs *pflag.FlagSet) {
+				fs.StringVar(&t.opts.CSVKeyColumn, "csv-key-column", t.opts.CSVKeyColumn, "Coluna da planilha (--csv) com a chave; vazio = primeira coluna do cabeçalho")
+			},
+		},
+		{
+			Name:        "csv-levels",
+			Shorthand:   "",
+			Type:        "stringSlice",
+			Description: "Colunas da planilha (--csv) que formam a hierarquia de pastas, na ordem; vazio = todas menos a chave, na ordem do arquivo",
+			Default:     "",
+			Example:     "--csv-levels CIDADE --csv-levels BAIRRO",
+			BindFlag: func(fs *pflag.FlagSet) {
+				fs.StringSliceVar(&t.opts.CSVLevels, "csv-levels", t.opts.CSVLevels, "Colunas da planilha (--csv) que formam a hierarquia de pastas, na ordem; vazio = todas menos a chave, na ordem do arquivo")
+			},
+		},
 	}
 }
 
@@ -289,8 +333,36 @@ func (t *Tool) Command() *cobra.Command {
 	_ = cmd.RegisterFlagCompletionFunc("report-format", cobra.FixedCompletions(
 		[]string{"csv", "json"}, cobra.ShellCompDirectiveNoFileComp,
 	))
+	// A planilha de --csv é sempre um arquivo .csv — deixa o cobra
+	// completar arquivos, filtrando pela extensão, em vez de listar
+	// candidatos manualmente.
+	_ = cmd.RegisterFlagCompletionFunc("csv", cobra.FixedCompletions(
+		[]string{"csv"}, cobra.ShellCompDirectiveFilterFileExt,
+	))
+	_ = cmd.RegisterFlagCompletionFunc("csv-levels", csvLevelsCompletion)
 
 	return cmd
+}
+
+// csvLevelsCompletion completa --csv-levels com os nomes de coluna do
+// cabeçalho da planilha já apontada em --csv (lido do próprio FlagSet do
+// comando em execução, via cmd.Flags().GetString("csv") — o valor que o
+// usuário já digitou antes de chegar em --csv-levels na linha de comando).
+// Sem --csv preenchido, ou se o arquivo não existir/não puder ser lido
+// (planilha ainda não criada, caminho digitado pela metade, permissão),
+// devolve lista vazia sem erro: completação nunca pode falhar ruidosamente.
+func csvLevelsCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	csvPath, err := cmd.Flags().GetString("csv")
+	if err != nil || strings.TrimSpace(csvPath) == "" {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	header, err := pdfutil.ReadCSVHeader(csvPath)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	return header, cobra.ShellCompDirectiveNoFileComp
 }
 
 // historyRecorder monta a função injetada em pdfutil.OrganizeOptions.
@@ -409,6 +481,15 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 		levelSpecs = specs
 	}
 
+	// Validado ANTES de qualquer processamento de arquivo, pelo mesmo
+	// motivo do --report-format acima: --csv e --level são incompatíveis
+	// (a hierarquia vem de um ou de outro), e as flags de detalhe de --csv
+	// (--csv-key-regex, --csv-key-column, --csv-levels) não têm efeito sem
+	// --csv.
+	if err := ValidateCSVOptions(t.opts.CSV, t.opts.CSVKeyRegex, t.opts.CSVKeyColumn, t.opts.CSVLevels, len(levelSpecs) > 0); err != nil {
+		return tool.Result{}, err
+	}
+
 	levels, err := BuildLevels(levelSpecs)
 	if err != nil {
 		return tool.Result{}, err
@@ -421,6 +502,28 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 			return tool.Result{}, fmt.Errorf("regex de nome de arquivo inválida: %w", err)
 		}
 		filenameRegex = re
+	}
+
+	// Carregada ANTES de qualquer processamento de arquivo, pelo mesmo
+	// motivo: um erro na planilha (caminho inexistente, coluna que não
+	// existe, chave duplicada) só vale a pena descobrir antes de mover ou
+	// copiar um lote inteiro.
+	var csvMap *pdfutil.CSVMap
+	var csvKeyRegex *regexp.Regexp
+	var csvWarnings []string
+	if csvPath := strings.TrimSpace(t.opts.CSV); csvPath != "" {
+		loaded, err := pdfutil.LoadCSVMap(csvPath, strings.TrimSpace(t.opts.CSVKeyColumn), t.opts.CSVLevels)
+		if err != nil {
+			return tool.Result{}, err
+		}
+		csvMap = &loaded
+		csvWarnings = loaded.Warnings
+
+		re, err := regexp.Compile(strings.TrimSpace(t.opts.CSVKeyRegex))
+		if err != nil {
+			return tool.Result{}, fmt.Errorf("regex de chave da planilha (--csv-key-regex) inválida: %w", err)
+		}
+		csvKeyRegex = re
 	}
 
 	unclassifiedDir := strings.TrimSpace(t.opts.UnclassifiedDir)
@@ -457,6 +560,8 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 		Overwrite:       t.opts.Overwrite,
 		Text:            textOpts,
 		Recorder:        historyRecorder(inputAbs, outputAbs),
+		CSV:             csvMap,
+		CSVKeyRegex:     csvKeyRegex,
 	}
 
 	result, err := pdfutil.Organize(context.Background(), organizeOpts)
@@ -488,6 +593,10 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 
 	details := make([]string, 0, maxUnclassifiedDetails+2)
 	details = append(details, ocrWarnings(textOpts)...)
+	// Avisos de células de nível vazias na planilha (--csv): não impedem a
+	// leitura (ver LoadCSVMap), mas o usuário precisa saber que algum
+	// componente de pasta foi omitido para uma chave específica.
+	details = append(details, csvWarnings...)
 	details = append(details, result.Warnings...)
 	if reportConfirmation != "" {
 		details = append(details, reportConfirmation)

@@ -74,16 +74,19 @@ func BuildReport(r OrganizeResult) []ReportRow {
 // jamais divirjam na redação. Cobre os valores de Unmatched.Level que
 // Organize de fato produz (ver organize.go): o rótulo de um nível
 // configurado pelo usuário (ex: "fornecedor"), "filename" (falha em
-// FilenameRegex), "texto" (falha ao extrair texto do PDF) e "destino"
-// (colisão de destino ou caminho resultante inválido — Unmatched.Pattern já
-// vem como uma frase legível em português nesse caso, ex: "destino já
-// existe: /abs/ACME/0001.pdf" ou "caminho resultante inválido"; "destino"
-// é uma pseudo-etiqueta interna, não um nível calibrado pelo usuário, por
-// isso NÃO passa pelo formato "nível %q não encontrado" do caso default —
-// fazer isso confundiria quem lê achando que errou a calibração de um
-// nível chamado "destino"). u == nil não deveria acontecer para uma
-// entrada não classificada, mas é tratado por segurança: uma linha "não
-// classificado" sem motivo nenhum seria pior do que um motivo genérico.
+// FilenameRegex), "texto" (falha ao extrair texto do PDF), "destino"
+// (colisão de destino ou caminho resultante inválido) e "chave" (modo
+// --csv: a regex da chave não casou, ou a chave encontrada não está na
+// planilha). "destino" e "chave" têm Unmatched.Pattern já pronto como uma
+// frase legível em português (ex: "destino já existe: /abs/ACME/0001.pdf",
+// "caminho resultante inválido", "chave não encontrada no documento" ou
+// `chave "001" não está na planilha`) — são pseudo-etiquetas internas, não
+// níveis calibrados pelo usuário, por isso NÃO passam pelo formato "nível
+// %q não encontrado" do caso default — fazer isso confundiria quem lê
+// achando que errou a calibração de um nível chamado "destino" ou "chave".
+// u == nil não deveria acontecer para uma entrada não classificada, mas é
+// tratado por segurança: uma linha "não classificado" sem motivo nenhum
+// seria pior do que um motivo genérico.
 func UnmatchedReason(u *Unmatched) string {
 	if u == nil {
 		return "motivo desconhecido"
@@ -94,6 +97,8 @@ func UnmatchedReason(u *Unmatched) string {
 	case "texto":
 		return "não foi possível extrair texto do arquivo"
 	case "destino":
+		return u.Pattern
+	case "chave":
 		return u.Pattern
 	default:
 		return fmt.Sprintf("nível %q não encontrado", u.Level)

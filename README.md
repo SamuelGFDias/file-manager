@@ -107,6 +107,10 @@ Organiza PDFs de uma pasta em uma hierarquia de subpastas com base no conteúdo 
 | `--ocr-lang` | string | Idioma do OCR (ex: `por`, `eng`) (default: `por`) |
 | `--report` | string | Caminho do arquivo de relatório desta execução; vazio (default) = não gera |
 | `--report-format` | string | Formato do relatório: `csv` ou `json` (default: `csv`) |
+| `--csv` | string | Planilha que define a hierarquia de pastas de destino; vazio (default) = hierarquia vem do conteúdo do PDF (`--level`). Incompatível com `--level` |
+| `--csv-key-regex` | string | Regex que extrai do PDF a chave usada para procurar na planilha (`--csv`). Obrigatório junto com `--csv` |
+| `--csv-key-column` | string | Coluna da planilha (`--csv`) com a chave; vazio = primeira coluna do cabeçalho |
+| `--csv-levels` | string (repetível) | Colunas da planilha (`--csv`) que formam a hierarquia, na ordem; vazio = todas menos a chave, na ordem do arquivo |
 
 **Exemplos:**
 
@@ -125,6 +129,51 @@ file-manager organize-pdf -i ./invoices -o ./invoices_organized \
 ```
 
 Com zero `--level`, a ferramenta funciona como um renomeador em lote dos PDFs.
+
+## Organizar a partir de uma planilha
+
+Até aqui a hierarquia de pastas sai do conteúdo de cada PDF, por regex. O caso inverso é comum: o usuário já tem uma planilha dizendo onde cada documento deve ser arquivado, e o PDF só precisa fornecer a **chave** para procurar nela.
+
+Planilha de exemplo (`planilha.csv`):
+
+```
+NOTA,CIDADE,BAIRRO
+001,São Gonçalo,Laranjal
+003,Rio de Janeiro,Centro
+005,Niterói,Fonseca
+```
+
+```bash
+file-manager organize-pdf --input ./notas --output ./organizado \
+  --csv ./planilha.csv --csv-key-regex "NOTA:\s*(\d+)"
+```
+
+Resultado:
+
+```
+organizado/
+  Sao_Goncalo/
+    Laranjal/
+      001.pdf
+  Rio_de_Janeiro/
+    Centro/
+      003.pdf
+  Niteroi/
+    Fonseca/
+      005.pdf
+```
+
+`--csv-key-regex` extrai do texto de cada PDF a chave (aqui, o número da nota); a primeira coluna da planilha (ou `--csv-key-column`, se informado) casa com essa chave, e as demais colunas (ou `--csv-levels`, na ordem informada) formam os níveis de pasta. O nome do arquivo de destino é a própria chave, por padrão — `--filename-regex`, quando informado, continua valendo normalmente e sobrepõe a chave.
+
+**Os nomes de pasta são normalizados: acentos são removidos e espaços viram `_`.** "São Gonçalo" vira `Sao_Goncalo`, "Niterói" vira `Niteroi`. É intencional: nome de pasta acentuado dá problema em rede compartilhada e em ambiente misto Windows/Linux.
+
+**A planilha aceita separador vírgula ou ponto e vírgula, detectado automaticamente pela primeira linha** — o Excel em português salva CSV com `;` por padrão, e é essa a planilha que a maioria dos usuários vai ter na mão. O BOM UTF-8 que o Excel costuma gravar no início do arquivo é descartado automaticamente.
+
+**Chaves são comparadas como texto, com espaços das pontas removidos — nunca convertidas para número**: `001` e `1` são chaves diferentes, porque zeros à esquerda são significativos em número de nota. Uma chave duplicada na planilha é erro (citando a chave repetida): duas linhas apontando para pastas diferentes sob a mesma chave precisam ser corrigidas por quem preencheu a planilha, não resolvidas por sorteio. Uma célula de nível vazia, ao contrário, não é erro: o componente de pasta correspondente é só omitido, com um aviso no resultado citando a chave e a coluna.
+
+**Uma chave que o regex encontra no PDF mas que não existe na planilha não interrompe o lote** — é, na prática, o caso mais comum: o arquivo vai para `--unclassified-dir` com o motivo citando a chave encontrada (ex.: `chave "999" não está na planilha`), para conferir na planilha depois.
+
+`--csv` é incompatível com `--level` (a hierarquia vem de um ou de outro, nunca dos dois) e exige `--csv-key-regex`; as flags `--csv-key-column` e `--csv-levels` só têm efeito junto com `--csv`. `--dry-run`, `--report`, `--overwrite`, `--move`/copiar e o restante do comportamento de `organize-pdf` funcionam exatamente igual em modo `--csv`.
 
 ## Relatório da organização
 
@@ -342,7 +391,7 @@ file-manager completion bash > /etc/bash_completion.d/file-manager
 
 Sem permissão de root, grave em `~/.local/share/bash-completion/completions/file-manager` (crie a pasta se não existir) e abra um terminal novo.
 
-**O que a completação oferece:** além dos nomes dos comandos e flags (isso o cobra já dá de graça), o Tab completa **valores**: os IDs de operações que ainda podem ser desfeitas (`undo --id`), as ferramentas que suportam perfil (`profiles list/export --tool`), o arquivo de um perfil a importar filtrado por extensão (`profiles import --file`) e os valores aceitos por cada flag de enumeração (`--mode`, `--ocr`, `--ocr-lang`, `--report-format`, `--sort`). Uma consulta que falhe (ex: diretório de configuração inacessível) nunca aparece como erro no meio da linha de comando — só resulta em nenhuma sugestão.
+**O que a completação oferece:** além dos nomes dos comandos e flags (isso o cobra já dá de graça), o Tab completa **valores**: os IDs de operações que ainda podem ser desfeitas (`undo --id`), as ferramentas que suportam perfil (`profiles list/export --tool`), o arquivo de um perfil a importar ou de uma planilha filtrados por extensão (`profiles import --file`, `organize-pdf --csv`), as colunas da planilha já apontada em `--csv` (`organize-pdf --csv-levels`) e os valores aceitos por cada flag de enumeração (`--mode`, `--ocr`, `--ocr-lang`, `--report-format`, `--sort`). Uma consulta que falhe (ex: diretório de configuração inacessível, planilha ainda não criada) nunca aparece como erro no meio da linha de comando — só resulta em nenhuma sugestão.
 
 ## OCR
 
