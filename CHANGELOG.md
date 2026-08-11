@@ -18,6 +18,13 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.8.1] - 2026-08-11
+
+### Corrigido
+
+- **OCR pulava páginas em silêncio quando o pdfcpu nomeava a imagem extraída com um prefixo diferente de `Im`.** O mapeamento de imagem extraída → número de página (`internal/pdfutil/textextract.go`) só reconhecia nomes no formato `..._Im<índice>.<ext>`; o pdfcpu deriva esse prefixo do nome do recurso XObject da página, que varia (`Im0`, `X0`, `Fm2`, ...), e num PDF real de duas páginas a segunda saiu como `X0` — sua imagem nunca ia para o Tesseract, e o usuário via "nenhum texto foi extraído" ou a expressão regular não casando, sem nenhuma pista da causa. O padrão agora aceita qualquer prefixo de letras. Existia desde a introdução do OCR (v0.2.0).
+- **Falha silenciosa na extração de imagens agora gera aviso.** A causa raiz do defeito acima não era só a expressão regular: um arquivo extraído cujo nome não casasse com o padrão era descartado sem avisar ninguém — o que permitiu o bug atravessar seis versões sem ser notado. `ExtractPageTextsOpts`/`ExtractTextOpts` (`internal/pdfutil/textextract.go`) agora devolvem avisos não-fatais, propagados a `OrganizeResult.Warnings` e `SplitResult.Warnings`: um aviso por arquivo não reconhecido (citando o nome) e, se nenhuma imagem extraída puder ser associada a uma página, um aviso agregado explícito de que o pdfcpu pode ter mudado a convenção de nomes.
+
 ## [0.8.0] - 2026-08-11
 
 ### Adicionado

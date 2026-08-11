@@ -35,7 +35,11 @@ type SplitOptions struct {
 
 // SplitResult descreve o resultado de uma operação de separação de PDF.
 type SplitResult struct {
-	Outputs  []string
+	Outputs []string
+	// Warnings contém avisos que não impedem a operação de ser considerada
+	// bem-sucedida: nenhum texto extraído, regex sem match (modo regex), e
+	// avisos de extração de texto vindos de ExtractPageTextsOpts (ex: imagem
+	// extraída para OCR cujo nome não pôde ser associada a uma página).
 	Warnings []string
 }
 
@@ -293,10 +297,11 @@ func Split(ctx context.Context, opts SplitOptions) (SplitResult, error) {
 			return SplitResult{}, fmt.Errorf("modo regex requer uma expressão regular")
 		}
 
-		pageTexts, err := ExtractPageTextsOpts(ctx, opts.Input, opts.Text)
+		pageTexts, textWarnings, err := ExtractPageTextsOpts(ctx, opts.Input, opts.Text)
 		if err != nil {
 			return SplitResult{}, fmt.Errorf("extrair texto de %q: %w", opts.Input, err)
 		}
+		result.Warnings = append(result.Warnings, textWarnings...)
 
 		allEmpty := true
 		for _, t := range pageTexts {

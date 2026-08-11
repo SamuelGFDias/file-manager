@@ -175,10 +175,13 @@ func (t *Tool) configure() (sampleText string, err error) {
 		return "", err
 	}
 
-	text, extractErr := pdfutil.ExtractTextOpts(context.Background(), samplePath, textOpts)
+	text, textWarnings, extractErr := pdfutil.ExtractTextOpts(context.Background(), samplePath, textOpts)
 	if extractErr != nil {
 		ui.Warnf("não foi possível extrair texto de %s: %v", ui.PathText(samplePath), extractErr)
 		text = ""
+	}
+	for _, w := range textWarnings {
+		ui.Warnf("%s: %s", ui.PathText(samplePath), w)
 	}
 
 	if err := t.configureLevels(text); err != nil {
