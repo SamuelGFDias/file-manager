@@ -21,8 +21,8 @@ type ExampleDoc struct {
 
 // Doc é a documentação exportável de uma ferramenta.
 type Doc struct {
-	ID          string
-	Title       string
+	ID    string
+	Title string
 	// Summary é uma linha resumindo a ferramenta.
 	Summary string
 	// Description é um parágrafo explicando o comportamento da ferramenta.

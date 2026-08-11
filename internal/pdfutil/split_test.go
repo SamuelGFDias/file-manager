@@ -166,6 +166,68 @@ func TestGroupPagesByRegexDuplicateNamesDisambiguated(t *testing.T) {
 	}
 }
 
+func TestStripPDFExtRemovesExtensionCaseInsensitively(t *testing.T) {
+	cases := map[string]string{
+		"pagina-001.pdf": "pagina-001",
+		"PAGINA-001.PDF": "PAGINA-001",
+		"pagina-001.Pdf": "pagina-001",
+		"pagina-001":     "pagina-001",
+		"pdf":            "pdf",
+		"":               "",
+	}
+	for in, want := range cases {
+		if got := stripPDFExt(in); got != want {
+			t.Errorf("stripPDFExt(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestWithPDFExtDoesNotDuplicateExtension(t *testing.T) {
+	cases := map[string]string{
+		"pagina-001":     "pagina-001.pdf",
+		"pagina-001.pdf": "pagina-001.pdf",
+		"pagina-001.PDF": "pagina-001.PDF",
+		"pagina-001.Pdf": "pagina-001.Pdf",
+	}
+	for in, want := range cases {
+		if got := withPDFExt(in); got != want {
+			t.Errorf("withPDFExt(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestGroupPagesByRegexTemplateWithExtensionNotDuplicated é a regressão
+// direta do defeito relatado: quando o nome final vem de --name-template (ou
+// de um valor padrão) que já inclui ".pdf", GroupPagesByRegex não pode
+// devolver um Name que ainda carregue a extensão — o campo é documentado
+// como "SEM extensão" e é o chamador (Split) quem acrescenta ".pdf" uma
+// única vez.
+func TestGroupPagesByRegexTemplateWithExtensionNotDuplicated(t *testing.T) {
+	pages := []string{"documento A", "documento B"}
+	re := regexp.MustCompile(`documento`)
+
+	got := GroupPagesByRegex(pages, re, "arquivo-%03d.pdf")
+	if len(got) != 2 {
+		t.Fatalf("esperava 2 grupos, obteve %d", len(got))
+	}
+	if got[0].Name != "arquivo-001" || got[1].Name != "arquivo-002" {
+		t.Fatalf("Name não deveria carregar a extensão do template: %+v", got)
+	}
+}
+
+// TestGroupPagesByRegexCaptureNamingUnaffectedByExtensionStripping garante
+// que a normalização de extensão não interfere no caminho feliz: nome vindo
+// de captura de regex continua correto e sem extensão.
+func TestGroupPagesByRegexCaptureNamingUnaffectedByExtensionStripping(t *testing.T) {
+	pages := []string{"NF: 12345"}
+	re := regexp.MustCompile(`NF:\s*(\d+)`)
+
+	got := GroupPagesByRegex(pages, re, "")
+	if len(got) != 1 || got[0].Name != "12345" {
+		t.Fatalf("esperava grupo nomeado \"12345\", obteve %+v", got)
+	}
+}
+
 func TestGroupPagesByRegexEmptyCaptureFallsBackToTemplate(t *testing.T) {
 	pages := []string{"Nota ", "conteúdo"}
 	re := regexp.MustCompile(`Nota (\d*)`)

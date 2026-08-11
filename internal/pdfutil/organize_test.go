@@ -153,6 +153,24 @@ func TestResolveDestinationSlashInCaptureIsSanitized(t *testing.T) {
 	}
 }
 
+// TestResolveDestinationFilenameCaptureAlreadyHasExtensionNotDuplicated cobre
+// o mesmo defeito de extensão duplicada corrigido em split.go, mas do lado
+// de organize.go: se o grupo de captura de FilenameRegex casar um trecho que
+// já termina em ".pdf" (situação incomum, mas possível dependendo da regex e
+// do texto do documento), o nome final não pode virar "....pdf.pdf".
+func TestResolveDestinationFilenameCaptureAlreadyHasExtensionNotDuplicated(t *testing.T) {
+	filenameRegex := regexp.MustCompile(`Arquivo: (\S+)`)
+	text := "Arquivo: relatorio.pdf"
+
+	relPath, unmatched := ResolveDestination(text, nil, filenameRegex)
+	if unmatched != nil {
+		t.Fatalf("não esperava falha: %+v", unmatched)
+	}
+	if relPath != "relatorio.pdf" {
+		t.Fatalf("relPath = %q, esperava %q (sem duplicar a extensão)", relPath, "relatorio.pdf")
+	}
+}
+
 func TestOrganizeDryRunDoesNotTouchFiles(t *testing.T) {
 	inputDir := t.TempDir()
 	outputDir := t.TempDir()

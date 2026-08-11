@@ -78,7 +78,7 @@ func (t *Tool) Doc() tool.Doc {
 			"mode: page\n" +
 			"ranges: \"\"\n" +
 			"regex: \"\"\n" +
-			"name_template: pagina-%03d.pdf\n" +
+			"name_template: pagina-%03d\n" +
 			"overwrite: false\n",
 		Notes: []string{
 			"Esta ferramenta NÃO faz OCR: um PDF digitalizado (imagem sem camada de texto) não tem texto para casar com nenhuma regex, e o modo regex avisa disso nos Warnings quando detecta páginas sem texto.",

@@ -72,8 +72,8 @@ func TestDefaultOptions(t *testing.T) {
 	if opts.Mode != "page" {
 		t.Errorf("defaultOptions().Mode = %q, want %q", opts.Mode, "page")
 	}
-	if opts.NameTemplate != "pagina-%03d.pdf" {
-		t.Errorf("defaultOptions().NameTemplate = %q, want %q", opts.NameTemplate, "pagina-%03d.pdf")
+	if opts.NameTemplate != "pagina-%03d" {
+		t.Errorf("defaultOptions().NameTemplate = %q, want %q", opts.NameTemplate, "pagina-%03d")
 	}
 }
 

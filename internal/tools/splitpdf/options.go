@@ -34,10 +34,14 @@ type Options struct {
 }
 
 // defaultOptions devolve as Options padrão da ferramenta split-pdf: modo
-// "page" (uma página por arquivo) e o template de nome "pagina-%03d.pdf".
+// "page" (uma página por arquivo) e o template de nome "pagina-%03d".
+//
+// NameTemplate NÃO inclui a extensão ".pdf": quem monta o caminho final do
+// arquivo de saída (pdfutil.Split) é responsável por acrescentá-la uma única
+// vez, inclusive quando o usuário fornece o próprio template já com ".pdf".
 func defaultOptions() Options {
 	return Options{
 		Mode:         "page",
-		NameTemplate: "pagina-%03d.pdf",
+		NameTemplate: "pagina-%03d",
 	}
 }

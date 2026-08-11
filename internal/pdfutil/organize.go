@@ -66,7 +66,10 @@ func ResolveDestination(text string, levels []Level, filenameRegex *regexp.Regex
 
 	parts := append([]string{}, components...)
 	if name != "" {
-		parts = append(parts, name+".pdf")
+		// withPDFExt (definida em split.go, mesmo pacote) evita extensão
+		// duplicada caso o grupo de captura de FilenameRegex já traga ".pdf"
+		// no texto casado — mesma defesa aplicada em split.go.
+		parts = append(parts, withPDFExt(name))
 	}
 	result := filepath.Join(parts...)
 

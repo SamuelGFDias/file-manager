@@ -180,8 +180,8 @@ func (t *Tool) params() []tool.Param {
 			Shorthand:   "",
 			Type:        "string",
 			Description: "Template do nome do arquivo quando não há captura da regex",
-			Default:     "pagina-%03d.pdf",
-			Example:     "pagina-%03d.pdf",
+			Default:     "pagina-%03d",
+			Example:     "pagina-%03d",
 			BindFlag: func(fs *pflag.FlagSet) {
 				fs.StringVar(&t.opts.NameTemplate, "name-template", t.opts.NameTemplate, "Template do nome do arquivo quando não há captura da regex")
 			},

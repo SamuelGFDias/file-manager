@@ -28,7 +28,7 @@ type SplitOptions struct {
 	Mode         SplitMode
 	Ranges       []string       // modo range, ex ["1-5","6-10","11-"]
 	Regex        *regexp.Regexp // modo regex
-	NameTemplate string         // ex "pagina-%03d.pdf"; usado quando não há captura
+	NameTemplate string         // ex "pagina-%03d" (sem ".pdf": a extensão é acrescentada uma única vez ao montar o caminho final); usado quando não há captura
 	Overwrite    bool
 }
 
@@ -44,6 +44,30 @@ type PageGroup struct {
 	Name  string // nome do arquivo SEM extensão
 	Start int    // 1-indexed, inclusivo
 	End   int    // 1-indexed, inclusivo
+}
+
+// stripPDFExt remove uma extensão ".pdf" final de name, comparando de forma
+// insensível a maiúsculas/minúsculas. Usada para normalizar nomes vindos de
+// templates ou capturas de regex que podem (ou não) já trazer a extensão,
+// garantindo que PageGroup.Name — documentado como "SEM extensão" — cumpra
+// essa promessa mesmo quando a entrada já vem com ".pdf".
+func stripPDFExt(name string) string {
+	if len(name) >= 4 && strings.EqualFold(name[len(name)-4:], ".pdf") {
+		return name[:len(name)-4]
+	}
+	return name
+}
+
+// withPDFExt acrescenta ".pdf" a name, a menos que name já termine com
+// ".pdf" (comparação insensível a maiúsculas/minúsculas) — ponto único de
+// concatenação da extensão ao montar caminhos de saída, para que um
+// --name-template informado pelo usuário já com ".pdf" não resulte em
+// "nome.pdf.pdf".
+func withPDFExt(name string) string {
+	if len(name) >= 4 && strings.EqualFold(name[len(name)-4:], ".pdf") {
+		return name
+	}
+	return name + ".pdf"
 }
 
 var invalidFilenameChars = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F\x7F]`)
@@ -147,6 +171,11 @@ func GroupPagesByRegex(pageTexts []string, re *regexp.Regexp, nameTemplate strin
 		if name == "" {
 			name = fmt.Sprintf(nameTemplate, n)
 		}
+		// PageGroup.Name é documentado como "SEM extensão"; normaliza aqui
+		// para que nem uma captura nem um template (padrão ou fornecido pelo
+		// usuário) que já terminem em ".pdf" produzam extensão duplicada
+		// quando o chamador (Split, modo regex) concatenar ".pdf" depois.
+		name = stripPDFExt(name)
 
 		count := usedNames[name]
 		finalName := name
@@ -236,7 +265,7 @@ func Split(ctx context.Context, opts SplitOptions) (SplitResult, error) {
 	case SplitByRange:
 		template := opts.NameTemplate
 		if template == "" {
-			template = "intervalo-%03d.pdf"
+			template = "intervalo-%03d"
 		}
 		for i, r := range opts.Ranges {
 			if err := ctx.Err(); err != nil {
@@ -244,9 +273,9 @@ func Split(ctx context.Context, opts SplitOptions) (SplitResult, error) {
 			}
 			name := SanitizeFilename(fmt.Sprintf(template, i+1))
 			if name == "" {
-				name = fmt.Sprintf("intervalo-%03d.pdf", i+1)
+				name = fmt.Sprintf("intervalo-%03d", i+1)
 			}
-			outFile := filepath.Join(outDir, name)
+			outFile := filepath.Join(outDir, withPDFExt(name))
 			if !opts.Overwrite {
 				if _, err := os.Stat(outFile); err == nil {
 					return SplitResult{}, fmt.Errorf("arquivo de saída %q já existe; use --overwrite para sobrescrever", outFile)
@@ -296,7 +325,7 @@ func Split(ctx context.Context, opts SplitOptions) (SplitResult, error) {
 			if err := ctx.Err(); err != nil {
 				return SplitResult{}, err
 			}
-			outFile := filepath.Join(outDir, g.Name+".pdf")
+			outFile := filepath.Join(outDir, withPDFExt(g.Name))
 			if !opts.Overwrite {
 				if _, err := os.Stat(outFile); err == nil {
 					return SplitResult{}, fmt.Errorf("arquivo de saída %q já existe; use --overwrite para sobrescrever", outFile)
