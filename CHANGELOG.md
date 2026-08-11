@@ -18,6 +18,19 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.9.0] - 2026-08-11
+
+### Corrigido
+
+- **Um manifesto de histórico ilegível não derruba mais `undo --list` (nem o `undo` de nenhuma outra operação).** Antes, um único arquivo `~/.config/file-manager/history/*.yaml` corrompido — disco cheio no meio de uma gravação anterior, processo interrompido no momento errado — abortava a listagem inteira, inutilizando o `undo` de **todas** as operações registradas, inclusive as íntegras: o pior lugar possível para um ponto único de falha, já que "undo" é exatamente o recurso que existe para socorrer o usuário quando algo deu errado. `internal/history.List` agora pula cada arquivo que falhar ao ler ou decodificar, reporta um aviso em português citando o nome do arquivo e o motivo, e continua listando os demais. `err == nil` nesse caso — só um problema no PRÓPRIO diretório de histórico (ex: sem permissão) ainda propaga erro. `undo --list` e a tela interativa de desfazer exibem os avisos; a completação de `undo --id` (Tab) os ignora silenciosamente, de propósito — um Tab não pode cuspir aviso no meio da linha de comando.
+- **`undo --list` não carrega mais o manifesto inteiro de cada operação para imprimir uma linha de resumo.** `internal/history.List` passou a devolver `[]Header` (metadados + `EntryCount`), não `[]Manifest` — com 200 execuções de 300 arquivos cada, isso evita reter 60 mil entradas na memória só para mostrar 200 linhas. `Load(id)` continua devolvendo o `Manifest` completo (com todas as `Entries`); é o que `undo` usa de fato para desfazer.
+
+### Adicionado
+
+- **Poda automática de histórico agora cobre também os manifestos PENDENTES (nunca desfeitos), não só os já desfeitos.** A poda introduzida nesta mesma versão de desenvolvimento (manifestos já desfeitos há mais de 30 dias) resolvia só uma fração do problema: quem organiza e nunca desfaz — o caso mais comum — continuava acumulando um manifesto por execução, para sempre. Agora um manifesto pendente com mais de 180 dias (`history.PrunePendingAfter`) também é removido automaticamente a cada `Save` (ex: a cada `organize-pdf` real). Um manifesto pendente mais novo que isso **nunca** é tocado, sob nenhuma condição — é exatamente ele que permite desfazer aquela operação mais tarde. Quando a poda remove algum manifesto pendente, `organize-pdf` avisa na hora (`Result.Details`): apagar em silêncio a capacidade de desfazer seria a surpresa que este projeto existe para evitar.
+- **`undo --list` mostra por padrão só as 20 operações mais recentes**, com um rodapé (`mostrando 20 de 137 — use --all para ver todos`) quando há mais; nova flag `undo --all` mostra tudo. A tela interativa de desfazer (menu principal) segue o mesmo limite, com uma opção final "Ver operações mais antigas" que amplia para a lista completa — um `survey.Select` com centenas de itens era inutilizável.
+- **`undo --prune` remove manualmente, na hora, os manifestos de histórico expirados** (mesmos critérios da poda automática), com confirmação a menos que `-y`. `--older-than <dias>` substitui os dois prazos padrão (30 dias para já desfeitas, 180 para pendentes) por um único limiar customizado.
+
 ## [0.8.1] - 2026-08-11
 
 ### Corrigido

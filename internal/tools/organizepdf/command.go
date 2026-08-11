@@ -375,7 +375,16 @@ func csvLevelsCompletion(cmd *cobra.Command, args []string, toComplete string) (
 // absolutos: o comando "undo" pode rodar depois, de um diretório de
 // trabalho diferente do usado nesta organização, então o manifesto precisa
 // fazer sentido independente do cwd de quem o gravou.
-func historyRecorder(inputDir, outputDir string) func(action string, entries []pdfutil.RecordedEntry) error {
+//
+// prunedPending, quando não-nil, recebe os IDs de manifestos PENDENTES que
+// a poda automática de history.Save removeu como efeito colateral desta
+// gravação — history.Recorder (a assinatura de pdfutil.OrganizeOptions)
+// não tem como devolver essa informação por si (só devolve error), então
+// ela sai por este ponteiro capturado no closure; runWith usa o valor
+// depois que Organize retorna para avisar o usuário em Result.Details.
+// Apagar em silêncio a capacidade de desfazer uma operação pendente seria
+// exatamente a surpresa que este projeto existe para evitar.
+func historyRecorder(inputDir, outputDir string, prunedPending *[]string) func(action string, entries []pdfutil.RecordedEntry) error {
 	return func(action string, entries []pdfutil.RecordedEntry) error {
 		histEntries := make([]history.Entry, 0, len(entries))
 		for _, e := range entries {
@@ -395,9 +404,32 @@ func historyRecorder(inputDir, outputDir string) func(action string, entries []p
 			Entries:   histEntries,
 		}
 
-		_, err := history.Save(m)
+		_, pending, err := history.Save(m)
+		if prunedPending != nil {
+			*prunedPending = pending
+		}
 		return err
 	}
+}
+
+// prunedPendingDetail formata a linha de Result.Details que avisa o
+// usuário quando a poda automática disparada por history.Save (ver
+// historyRecorder) removeu manifestos PENDENTES — não apenas já desfeitos —
+// como efeito colateral desta gravação. Só é chamada quando prunedPending
+// não está vazio.
+func prunedPendingDetail(prunedPending []string) string {
+	n := len(prunedPending)
+	days := int(history.PrunePendingAfter.Hours() / 24)
+	if n == 1 {
+		return fmt.Sprintf(
+			"1 registro de histórico com mais de %d dias foi removido e não pode mais ser desfeito",
+			days,
+		)
+	}
+	return fmt.Sprintf(
+		"%d registros de histórico com mais de %d dias foram removidos e não podem mais ser desfeitos",
+		n, days,
+	)
 }
 
 // writeReportFile monta as linhas do relatório a partir de result e grava
@@ -548,6 +580,7 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 		outputAbs = t.opts.OutputDir
 	}
 
+	var prunedPending []string
 	organizeOpts := pdfutil.OrganizeOptions{
 		InputDir:        t.opts.InputDir,
 		OutputDir:       t.opts.OutputDir,
@@ -559,7 +592,7 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 		Sample:          sample,
 		Overwrite:       t.opts.Overwrite,
 		Text:            textOpts,
-		Recorder:        historyRecorder(inputAbs, outputAbs),
+		Recorder:        historyRecorder(inputAbs, outputAbs, &prunedPending),
 		CSV:             csvMap,
 		CSVKeyRegex:     csvKeyRegex,
 	}
@@ -600,6 +633,14 @@ func (t *Tool) runWith(dryRun bool, sample int) (tool.Result, error) {
 	details = append(details, result.Warnings...)
 	if reportConfirmation != "" {
 		details = append(details, reportConfirmation)
+	}
+	// Honestidade com o usuário: se a poda automática do histórico (ver
+	// historyRecorder) removeu algum manifesto PENDENTE — não apenas já
+	// desfeito — como efeito colateral desta gravação, isso precisa
+	// aparecer. Apagar em silêncio a capacidade de desfazer uma operação
+	// seria exatamente o tipo de surpresa que este projeto evita.
+	if len(prunedPending) > 0 {
+		details = append(details, prunedPendingDetail(prunedPending))
 	}
 	for i, entry := range result.Unclassified {
 		if i >= maxUnclassifiedDetails {

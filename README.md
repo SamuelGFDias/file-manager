@@ -232,7 +232,25 @@ Sem `--id` nem `--last`, em terminal interativo o comando pergunta qual operaç�
 | `--dry-run` | Só mostra o que seria feito, sem tocar em nada |
 | `-y, --yes` | Desfaz sem pedir confirmação |
 | `--list` | Lista as operações registradas e sai |
+| `--all` | Com `--list`, mostra todas as operações, sem o limite padrão de 20 |
 | `--force` | Permite desfazer uma operação que já foi desfeita antes |
+| `--prune` | Remove do disco os manifestos de histórico expirados e sai |
+| `--older-than <dias>` | Com `--prune`, usa N dias como limiar em vez do padrão |
+
+### Onde fica o histórico e por quanto tempo é mantido
+
+Cada operação real vira um arquivo em `<diretório de configuração>/file-manager/history/<id>.yaml` (`~/.config/file-manager/history` no Linux/macOS, `%AppData%\file-manager\history` no Windows). `undo --list` mostra, por padrão, só as **20 operações mais recentes** — com histórico grande, um rodapé (`mostrando 20 de 137 — use --all para ver todos`) avisa quantas ficaram de fora; `--all` remove o limite. A tela interativa de desfazer, no menu principal, segue o mesmo limite, com uma opção final "Ver operações mais antigas" que amplia para a lista completa.
+
+O histórico não cresce para sempre: a cada operação real (`organize-pdf`), uma poda automática remove manifestos expirados, com dois prazos diferentes:
+
+- **Operação já desfeita:** removida **30 dias** depois de ter sido desfeita — já cumpriu sua função, o único motivo de mantê-la por um tempo é permitir conferir o histórico recente.
+- **Operação pendente (nunca desfeita):** removida **180 dias** depois de ter sido registrada — desfazer algo de 6 meses atrás deixou de ser realista (o destino provavelmente já mudou por fora do `file-manager`, e a verificação de tamanho faria o `undo` pular a maioria dos arquivos de qualquer forma). Uma operação pendente **mais nova** que isso nunca é removida automaticamente, não importa a idade — é exatamente ela que permite desfazer mais tarde.
+
+Quando a poda automática remove um manifesto **pendente** (não um já desfeito), `organize-pdf` avisa na hora, junto do resumo da execução — algo como `2 registros de histórico com mais de 180 dias foram removidos e não podem mais ser desfeitos`. Apagar em silêncio a capacidade de desfazer seria exatamente o tipo de surpresa que este projeto evita.
+
+Para podar manualmente, sem esperar a próxima operação: `file-manager undo --prune` (pede confirmação, a menos que `-y`). `--older-than <dias>` substitui os dois prazos padrão por um único limiar escolhido na hora — por exemplo, `file-manager undo --prune --older-than 90 -y` remove tudo (desfeito ou pendente) com mais de 90 dias.
+
+Um manifesto individual corrompido (arquivo truncado por disco cheio, processo interrompido no momento errado) nunca derruba a listagem nem o `undo` das demais operações: `undo --list` e a tela interativa mostram um aviso citando o arquivo problemático e seguem normalmente com o resto do histórico.
 
 ## Atualização
 
