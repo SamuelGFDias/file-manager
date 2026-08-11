@@ -177,6 +177,8 @@ Atualize:
 1. **`README.md`:** Adicione uma seção com a tabela de flags e 2 exemplos reais de comando.
 2. **`CHANGELOG.md`:** Adicione uma entrada na seção `[Não publicado]` descrevendo a ferramenta nova.
 
+Essa entrada em `[Não publicado]` **é** a nota de release voltada ao usuário final — não um resumo técnico à parte. Escreva-a pensando em quem só usa o programa: o que mudou, por quê, como usar. Quando a versão publicada nascer dessa entrada, o texto vai direto para o release sem edição posterior (ver "Processo de Release" abaixo).
+
 ## Arquitetura e Princípios
 
 ### Camadas
@@ -224,6 +226,30 @@ Para remover uma flag no futuro:
 3. Só então remova em uma versão MAJOR.
 
 Isso garante que automações de usuários antigas tenham tempo de se adaptar.
+
+## Processo de Release
+
+Push de uma tag `v*` dispara `.github/workflows/release.yml`: o workflow extrai as notas de release para a tag, roda `go test ./...` como gate, compila os binários de Linux e Windows com `CGO_ENABLED=0` e publica o release com os dois artefatos anexados.
+
+**As notas voltadas ao usuário final são escritas no PR, não depois do release.** Ao preparar uma versão, decida onde o texto vai morar:
+
+1. **Caso comum:** a entrada da versão em `CHANGELOG.md` (seção `## [Não publicado]`, que vira `## [X.Y.Z]` no dia do release) já é usada como nota de release. Escreva-a pensando no usuário final (Passo 7 acima).
+2. **Quando o changelog não for suficiente** (uma mudança que merece contexto mais longo, ou um tom diferente do changelog técnico): crie `.github/release-notes/vX.Y.Z.md` com o texto final. Quando esse arquivo existe, ele substitui a seção do changelog nas notas do release — ver `.github/release-notes/README.md`.
+
+Em ambos os casos, o texto é revisado como parte do PR, junto com o código — não escrito depois, com o release já publicado.
+
+**Lançar uma versão nova**, depois que a entrada do `CHANGELOG.md` (e, se for o caso, o arquivo em `.github/release-notes/`) já estiverem mesclados em `main`:
+```bash
+git tag -a vX.Y.Z -m "..."
+git push origin vX.Y.Z
+```
+Nada mais é necessário — o workflow cuida de extrair as notas, testar, compilar e publicar.
+
+A versão reportada por `file-manager version` vem da tag, injetada via `-ldflags` — a tag é a fonte da verdade da versão, não o código.
+
+Se a tag não tiver notas correspondentes (nem `.github/release-notes/vX.Y.Z.md` nem seção `## [X.Y.Z]` no changelog), o workflow falha **antes de compilar**, com uma mensagem citando a tag — é o comportamento desejado: publicar sem notas é pior do que não publicar.
+
+O job precisa de `permissions: contents: write`; sem isso a publicação do release falha com 403.
 
 ## Checklist para Contribuições
 

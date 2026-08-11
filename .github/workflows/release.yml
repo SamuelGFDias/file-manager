@@ -17,6 +17,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Extrair notas de release
+        run: |
+          .github/extract-release-notes.sh \
+            "${{ github.ref_name }}" \
+            CHANGELOG.md \
+            .github/release-footer.md \
+            > release-notes.md
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -41,4 +49,5 @@ jobs:
           files: |
             dist/file-manager-linux-amd64
             dist/file-manager-windows-amd64.exe
+          body_path: release-notes.md
           generate_release_notes: true
