@@ -216,6 +216,99 @@ func PickFileWithPrompt(start, prompt string, exts []string) (string, error) {
 	}
 }
 
+// maxEmptySelectionAttempts limita quantas vezes o usuário pode confirmar a
+// seleção de arquivos (survey.MultiSelect) sem marcar nada antes de o fluxo
+// desistir — protege contra laço infinito. É exatamente o cenário do
+// defeito relatado: o usuário navegou até uma pasta com PDF, mas apertou
+// Enter sem antes apertar a barra de espaço (que é como se marca uma opção
+// em survey.MultiSelect — Enter só confirma), confirmando uma seleção vazia
+// que só era percebida seis perguntas depois. Agora o fluxo NUNCA avança
+// com zero arquivos marcados: ou o usuário marca algo, ou desiste
+// explicitamente, ou o limite de tentativas é atingido.
+const maxEmptySelectionAttempts = 3
+
+// emptySelectionAdvice decide a mensagem de aviso mostrada quando o usuário
+// confirma survey.MultiSelect sem marcar nada, e se o laço de seleção deve
+// desistir (giveUp), dado quantas tentativas já foram usadas. Função pura
+// (sem I/O), testável sem terminal — é o núcleo da decisão tomada por
+// pickMarkedFiles.
+func emptySelectionAdvice(attempt, maxAttempts int) (message string, giveUp bool) {
+	if attempt >= maxAttempts {
+		return fmt.Sprintf(
+			"nenhum arquivo foi marcado (a marcação é feita com a BARRA DE ESPAÇO, e não com Enter); "+
+				"limite de %d tentativas atingido — cancelando.",
+			maxAttempts,
+		), true
+	}
+	return fmt.Sprintf(
+		"nenhum arquivo foi marcado (a marcação é feita com a BARRA DE ESPAÇO, e não com Enter). Tentativa %d de %d.",
+		attempt, maxAttempts,
+	), false
+}
+
+// emptyDirMessage monta o aviso mostrado quando a pasta escolhida não tem
+// nenhum arquivo com as extensões pedidas — dizendo qual pasta e qual
+// extensão, em vez de simplesmente apresentar uma lista vazia de opções
+// (que não comunica nada ao usuário). Função pura, testável sem terminal.
+func emptyDirMessage(dir string, exts []string) string {
+	if len(exts) == 0 {
+		return fmt.Sprintf("a pasta %s não tem nenhum arquivo.", dir)
+	}
+	return fmt.Sprintf("a pasta %s não tem nenhum arquivo com a extensão %s.", dir, strings.Join(exts, " ou "))
+}
+
+// pickMarkedFiles pergunta, via survey.MultiSelect, quais arquivos de
+// fileOptions marcar. Se o usuário confirmar sem marcar nada, avisa
+// (lembrando que a marcação é com a barra de espaço) e pergunta se quer
+// tentar de novo, até maxEmptySelectionAttempts vezes; a essa altura, ou se
+// o usuário recusar tentar de novo, devolve ErrCancelled. O chamador
+// (PickFiles) nunca recebe uma seleção vazia sem erro.
+func pickMarkedFiles(fileOptions []string) ([]string, error) {
+	for attempt := 1; attempt <= maxEmptySelectionAttempts; attempt++ {
+		selectedFiles := []string{}
+		promptErr := survey.AskOne(
+			&survey.MultiSelect{
+				Message: "Selecione os arquivos",
+				Options: fileOptions,
+			},
+			&selectedFiles,
+		)
+
+		if promptErr != nil {
+			if errors.Is(promptErr, terminal.InterruptErr) {
+				return nil, ErrCancelled
+			}
+			return nil, promptErr
+		}
+
+		if len(selectedFiles) > 0 {
+			return selectedFiles, nil
+		}
+
+		message, giveUp := emptySelectionAdvice(attempt, maxEmptySelectionAttempts)
+		fmt.Println(message)
+		if giveUp {
+			return nil, ErrCancelled
+		}
+
+		retry := true
+		if err := survey.AskOne(&survey.Confirm{
+			Message: "Tentar selecionar novamente nesta pasta?",
+			Default: true,
+		}, &retry); err != nil {
+			if errors.Is(err, terminal.InterruptErr) {
+				return nil, ErrCancelled
+			}
+			return nil, err
+		}
+		if !retry {
+			return nil, ErrCancelled
+		}
+	}
+
+	return nil, ErrCancelled
+}
+
 // PickFiles navega a partir de start e devolve vários arquivos do diretório atual (multi-seleção).
 func PickFiles(start string, exts []string) ([]string, error) {
 	cur, err := normalizePath(start)
@@ -278,10 +371,13 @@ func PickFiles(start string, exts []string) ([]string, error) {
 		}
 
 		if selectedNav == "[ Escolher arquivos desta pasta ]" {
-			// Segunda pergunta: multi-seleção de arquivos
+			// Segunda pergunta: multi-seleção de arquivos. Uma pasta sem
+			// nenhum arquivo da extensão pedida não chega a mostrar a
+			// lista (que estaria vazia e não comunicaria nada): avisa qual
+			// pasta e qual extensão, e volta à navegação para escolher
+			// outra.
 			if len(files) == 0 {
-				// Sem arquivos, mostra mensagem e volta ao menu
-				fmt.Println("Nenhum arquivo disponível nesta pasta.")
+				fmt.Println(emptyDirMessage(cur, exts))
 				continue
 			}
 
@@ -290,20 +386,9 @@ func PickFiles(start string, exts []string) ([]string, error) {
 				fileOptions = append(fileOptions, f.Name)
 			}
 
-			selectedFiles := []string{}
-			filesPromptErr := survey.AskOne(
-				&survey.MultiSelect{
-					Message: "Selecione os arquivos",
-					Options: fileOptions,
-				},
-				&selectedFiles,
-			)
-
-			if filesPromptErr != nil {
-				if errors.Is(filesPromptErr, terminal.InterruptErr) {
-					return nil, ErrCancelled
-				}
-				return nil, filesPromptErr
+			selectedFiles, err := pickMarkedFiles(fileOptions)
+			if err != nil {
+				return nil, err
 			}
 
 			// Converte nomes selecionados para caminhos absolutos

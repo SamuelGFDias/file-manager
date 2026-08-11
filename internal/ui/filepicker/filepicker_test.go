@@ -3,6 +3,7 @@ package filepicker
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -356,6 +357,77 @@ func TestResolveStartEmptyWithoutMemoryFallsBackToWorkingDir(t *testing.T) {
 	}
 	if got != wd {
 		t.Errorf("resolveStart(\"\") sem memória = %q, want %q (diretório de trabalho atual)", got, wd)
+	}
+}
+
+// TestEmptySelectionAdvice_RetriesBeforeLimit cobre o caso comum: ainda há
+// tentativas sobrando, então a mensagem orienta (mencionando a barra de
+// espaço) e o laço não desiste.
+func TestEmptySelectionAdvice_RetriesBeforeLimit(t *testing.T) {
+	message, giveUp := emptySelectionAdvice(1, maxEmptySelectionAttempts)
+
+	if giveUp {
+		t.Fatalf("emptySelectionAdvice(1, %d) desistiu antes do limite", maxEmptySelectionAttempts)
+	}
+	if !strings.Contains(message, "ESPAÇO") {
+		t.Errorf("mensagem %q não menciona a barra de espaço", message)
+	}
+}
+
+// TestEmptySelectionAdvice_GivesUpAtLimit cobre a última tentativa: o laço
+// tem que desistir (giveUp=true) para nunca virar um laço infinito.
+func TestEmptySelectionAdvice_GivesUpAtLimit(t *testing.T) {
+	message, giveUp := emptySelectionAdvice(maxEmptySelectionAttempts, maxEmptySelectionAttempts)
+
+	if !giveUp {
+		t.Fatalf("emptySelectionAdvice(%d, %d) deveria desistir no limite de tentativas", maxEmptySelectionAttempts, maxEmptySelectionAttempts)
+	}
+	if !strings.Contains(message, "ESPAÇO") {
+		t.Errorf("mensagem %q não menciona a barra de espaço", message)
+	}
+}
+
+// TestEmptyDirMessage_MentionsDirAndExtension garante que o aviso de pasta
+// sem arquivos da extensão pedida diz qual pasta e qual extensão — em vez
+// de só apresentar uma lista vazia, que não comunica nada.
+func TestEmptyDirMessage_MentionsDirAndExtension(t *testing.T) {
+	got := emptyDirMessage("/tmp/downloads", []string{".pdf"})
+
+	if !strings.Contains(got, "/tmp/downloads") {
+		t.Errorf("mensagem %q não menciona a pasta", got)
+	}
+	if !strings.Contains(got, ".pdf") {
+		t.Errorf("mensagem %q não menciona a extensão", got)
+	}
+}
+
+// TestEmptyDirMessage_NoExtensionFilter cobre exts vazio (sem filtro de
+// extensão): a mensagem não deve tentar citar uma extensão que não existe.
+func TestEmptyDirMessage_NoExtensionFilter(t *testing.T) {
+	got := emptyDirMessage("/tmp/downloads", nil)
+
+	if !strings.Contains(got, "/tmp/downloads") {
+		t.Errorf("mensagem %q não menciona a pasta", got)
+	}
+}
+
+// TestListDir_EmptyDirectoryWithExtensionFilter é a base da detecção de
+// "pasta sem arquivos da extensão pedida" usada por PickFiles: uma pasta
+// só com um arquivo de outra extensão deve devolver zero entradas de
+// arquivo quando filtrada por .pdf (a pasta em si não tem PDF nenhum).
+func TestListDir_EmptyDirectoryWithExtensionFilter(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.WriteFile(filepath.Join(tmpDir, "notas.txt"), []byte("txt"), 0644)
+
+	entries, err := ListDir(tmpDir, []string{".pdf"})
+	if err != nil {
+		t.Fatalf("ListDir devolveu erro: %v", err)
+	}
+
+	for _, e := range entries {
+		if !e.IsDir {
+			t.Errorf("esperava nenhum arquivo (só .pdf é aceito), obteve %s", e.Name)
+		}
 	}
 }
 

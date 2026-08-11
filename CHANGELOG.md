@@ -22,6 +22,13 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.12.1] - 2026-08-11
+
+### Corrigido
+
+- **Seleção vazia de arquivos não é mais aceita em silêncio.** Relato real: ao usar `ocr-pdf` pelo menu, o usuário navegou até uma pasta com PDF, confirmou a tela de `survey.MultiSelect` sem marcar nenhum arquivo (nela, navegar é com as setas, **marcar é com a barra de espaço** — Enter só confirma) e o programa seguiu por mais seis perguntas (sufixo, idioma, sobrescrita, retomada, simulação) antes de falhar com `"informe ao menos um arquivo ou pasta em --input"`. Agora `filepicker.PickFiles` avisa na hora, lembrando da barra de espaço, e oferece tentar de novo (limite de 3 tentativas); `ocr-pdf` e `merge-pdf` — que tinham o mesmo laço de escolha de entradas duplicado — ganharam a mesma validação antecipada, garantindo que o fluxo nunca avança para as perguntas seguintes com zero entradas escolhidas. Uma pasta sem nenhum arquivo da extensão pedida também é avisada no ato (pasta e extensão citadas), em vez de apresentar uma lista vazia. Mesmo padrão já corrigido em `organize-pdf` na v0.2.1, que a ferramenta nova (`ocr-pdf`, v0.11.0) não tinha herdado.
+- **A dica de `survey.MultiSelect` (usada para marcar vários arquivos) estava em inglês.** A tradução do template de `survey.Select` na v0.2.1 não cobriu o de escolha múltipla, que seguiu exibindo `[Use arrows to move, space to select, ...]` — a única parte em inglês de uma interface inteiramente em português, e exatamente a informação que faltou no relato acima. Agora `[use ↑ ↓ para navegar, ESPAÇO para marcar, → marca todos, ← desmarca todos, digite para filtrar, Enter para confirmar]`.
+
 ## [0.12.0] - 2026-08-11
 
 ### Adicionado
