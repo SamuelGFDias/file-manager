@@ -378,6 +378,18 @@ Até a v0.10.x, o OCR do CLI (Decisão 7) só servia para **leitura**: o texto r
 
 **`ocr-pdf` e `merge-pdf` duplicam o bloco inteiro de "como adicionar entradas"** (mesmo texto de pergunta, mesma lógica de profundidade de pasta) — duplicação pré-existente ao lançamento de `ocr-pdf`, não introduzida por esta correção. A correção foi aplicada **identicamente** nas duas cópias, de propósito, para não deixar o defeito vivo numa das duas — mas a duplicação em si permanece: um refactor futuro que extraia esse bloco para um helper compartilhado (ex: em `internal/ui/filepicker` ou um novo pacote) eliminaria o risco de as duas cópias divergirem de novo, como quase aconteceu aqui.
 
+### 20. Flag `--version`/`-v` Convive com o Subcomando `version` (Saída Idêntica)
+
+Até a v0.11.0, a única forma de consultar a versão era `file-manager version`; `--version`/`-v` — convenção quase universal em CLIs — devolvia "flag desconhecida" e código de saída 1, a mesma impressão de "programa mal-acabado" já discutida na Decisão 17 para partes em inglês.
+
+**As duas formas convivem, de propósito — nenhuma substitui a outra.** Remover o subcomando quebraria quem já o usa (inclusive `internal/selfupdate.VerifyBinary`, que roda `<binário-baixado> version` para validar um download antes de substituir o executável em uso — ver Decisão 12); não acrescentar a flag deixaria o reflexo mais comum de todo usuário de CLI sem resposta.
+
+**As duas formas produzem a MESMA saída, byte a byte — este é o ponto que exigiu atenção, não a flag em si.** O template padrão do cobra (`defaultVersionTemplate`) imprime algo como `file-manager version v0.11.0 (...)`, diferente do que `file-manager version` sempre imprimiu (`v0.11.0 (...)`, sem o nome do binário nem a palavra "version" na frente). Ter duas saídas diferentes para a mesma informação é exatamente o tipo de divergência que este projeto evita em outros lugares (dry-run vs. execução real — Decisão 4; tela vs. comando de `undo` — Decisão 14): um script feito em cima de uma das duas formas seria surpreendido pela outra. `NewRootCommand` (`internal/app/root.go`) fecha essa lacuna com `root.SetVersionTemplate("{{.Version}}\n")` — como `root.Version` é setado como `v.String()` (o mesmo método que `newVersionCommand` usa), o template imprime exatamente o mesmo texto. `TestVersionFlagMatchesVersionSubcommand` (`internal/app/version_flag_test.go`) e `TestVersionFlagMatchesSubcommand` (`e2e/version_flag_test.go`) travam essa igualdade nos dois níveis (chamada direta ao `cobra.Command` e binário real).
+
+**A flag é registrada manualmente, ANTES do cobra criar a sua.** `Command.InitDefaultVersionFlag` (chamado automaticamente e de forma idempotente por `Execute()`, inclusive ao montar `--help`) só cria a flag `--version` quando `c.Flags().Lookup("version") == nil` — gerando, quando cria, uma descrição fixa em inglês (`"version for file-manager"`), sem gancho de tradução. `root.Flags().BoolP("version", "v", false, "mostra a versão do binário")`, registrado dentro de `NewRootCommand` antes de qualquer execução, faz o cobra pular a criação da dele: a checagem de `--version` em `Command.execute` só olha o FLAG por nome (`"version"`, bool), não quem o registrou, então nada do comportamento embutido muda — só o texto de ajuda. O atalho `-v` foi confirmado livre (nenhuma ferramenta nem subcomando deste CLI o usa) antes de reivindicá-lo explicitamente, em vez de depender do fallback silencioso do cobra (que só usa `-v` quando `ShorthandLookup("v") == nil` de qualquer forma).
+
+**Se um refactor futuro remover `root.SetVersionTemplate` ou passar a montar `root.Version` de um jeito diferente de `v.String()`, a saída de `--version` volta a divergir da de `version` silenciosamente** — os testes citados acima existem para pegar exatamente isso.
+
 ## Fluxo para Adicionar Uma Ferramenta Nova
 
 ### Passo 1: Gerar esqueleto
@@ -629,20 +641,36 @@ Os três já foram corrigidos no código de produção — mas nenhum unitário 
 
 ## Processo de Release
 
-Push de uma tag `v*` dispara `.github/workflows/release.yml`: o workflow roda `go test ./...` como gate, compila os binários de Linux e Windows com `CGO_ENABLED=0` e publica o release com os dois artefatos anexados.
+Push de uma tag `v*` dispara `.github/workflows/release.yml`: o workflow extrai as notas de release em português para a tag, roda `go test ./...` como gate, compila os binários de Linux e Windows com `CGO_ENABLED=0` e publica o release com os dois artefatos anexados.
 
-**Lançar uma versão nova:**
+**Lançar uma versão nova**, depois que a entrada da versão em `CHANGELOG.md` **e** o arquivo `.github/release-notes/vX.Y.Z.md` já estiverem mesclados em `main`:
 ```bash
 git tag -a vX.Y.Z -m "..."
 git push origin vX.Y.Z
 ```
-Nada mais é necessário — o workflow cuida de teste, build e publicação.
+Nada mais é necessário — o workflow cuida de extrair as notas, testar, compilar e publicar.
 
 A versão reportada por `file-manager version` vem da tag, injetada via `-ldflags` (o mesmo mecanismo de `main.version` descrito acima) — por isso a tag é a fonte da verdade da versão, não o código.
 
 O job precisa de `permissions: contents: write` no workflow; sem isso a publicação do release falha com 403.
 
-As notas geradas automaticamente (`generate_release_notes: true`) são só o changelog de commits desde a tag anterior. Para notas descritivas em português voltadas ao usuário final, editar depois com `gh release edit <tag> --notes-file <arquivo>`.
+### Decisão: notas de release em português saem do próprio workflow, não são editadas depois
+
+Até a v0.11.0 (14 releases publicados), `generate_release_notes: true` produzia só o changelog automático de commits, em inglês. As notas descritivas em português eram escritas **depois** da publicação, à mão, com `gh release edit <tag> --notes-file <arquivo>`. Levantamento dos releases recentes: em **seis dos oito mais recentes**, quem executava o release encerrava a sessão enquanto esperava o workflow terminar, e o release ficava temporariamente sem notas até alguém retomar manualmente; duas vezes a linha `**Full Changelog**` foi sobrescrita por acidente ao editar e precisou ser reconstruída via API.
+
+O problema de fundo não era a espera — era que o texto voltado ao usuário final era produzido **depois** do release estar publicado, fora de qualquer PR, sem revisão nenhuma.
+
+A partir desta mudança: `.github/extract-release-notes.sh <tag> <changelog> <rodapé>` monta as notas a partir de `.github/release-notes/<tag>.md` e anexa o rodapé fixo `.github/release-footer.md` (instruções de download, `chmod +x`, aviso do SmartScreen do Windows, lembrete de `file-manager update`). O workflow roda esse script como primeiro passo do job — **antes** de compilar — e falha o job se o arquivo não existir para a tag: publicar sem notas é pior que não publicar, e falhar antes de gastar minutos compilando é o comportamento certo.
+
+O resultado vai para `softprops/action-gh-release` via `body_path`, com `generate_release_notes: true` mantido: pela documentação da action, quando `body`/`body_path` é fornecido junto com `generate_release_notes: true`, o texto fornecido é **pré-pendido** às notas geradas automaticamente pelo GitHub — não as substitui. É assim que a linha `**Full Changelog**` continua aparecendo no final de todo release, sem ninguém precisar preservá-la à mão.
+
+### Decisão: `CHANGELOG.md` e as notas de release não compartilham texto, e não há fallback entre os dois
+
+A primeira versão deste mecanismo usava a seção do `CHANGELOG.md` como fonte padrão, caindo em `.github/release-notes/<tag>.md` só "quando o changelog não bastasse". Testado na prática (`v0.9.0`), o resultado publicaria como nota de release um trecho como *"`internal/history.List` agora pula cada arquivo que falhar ao ler ou decodificar... passou a devolver `[]Header`... evita reter 60 mil entradas na memória"* — texto correto para quem mantém o código, incompreensível para quem baixa o `.exe` e dá duplo clique nele.
+
+`CHANGELOG.md` e `.github/release-notes/<tag>.md` respondem a perguntas diferentes: o primeiro é o registro técnico (nomes de função, tipos, decisões de implementação) para quem mantém o projeto; o segundo é "o que muda para mim", para quem só usa o programa. Um fallback do segundo para o primeiro parece rede de segurança, mas garante que, no dia em que alguém esquecer de escrever as notas ao usuário, o release saia com o texto técnico — sem ninguém perceber, porque tecnicamente "funcionou". Por isso `.github/release-notes/<tag>.md` é **obrigatório, sem fallback**: na ausência dele, `extract-release-notes.sh` falha citando o caminho exato que falta criar, em vez de degradar em silêncio para o texto errado.
+
+O efeito prático: quem escreve a feature escreve dois textos no mesmo PR — a entrada técnica em `CHANGELOG.md` (`[Não publicado]`) e as notas ao usuário em `.github/release-notes/<tag>.md` — revisados juntos, antes do release existir. Ver `docs/CONTRIBUTING.md`, seção "Processo de Release", para o passo a passo, e `.github/release-notes/README.md` para o que escrever em cada um (com exemplo lado a lado).
 
 ## Exportação de Documentação
 

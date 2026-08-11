@@ -12,6 +12,10 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 
 ## [Não publicado]
 
+### Alterado
+
+- **Interno:** o workflow de release (`.github/workflows/release.yml`) agora publica as notas em português automaticamente, extraídas por `.github/extract-release-notes.sh` da própria entrada do changelog (ou de `.github/release-notes/<tag>.md`, quando existir), em vez de exigir edição manual depois da publicação. Não afeta o comportamento do programa; ver `AGENTS.md`, seção "Processo de Release".
+
 ### Planejado
 
 - [ ] Suporte para criptografia de perfis
@@ -24,6 +28,12 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 
 - **Seleção vazia de arquivos não é mais aceita em silêncio.** Relato real: ao usar `ocr-pdf` pelo menu, o usuário navegou até uma pasta com PDF, confirmou a tela de `survey.MultiSelect` sem marcar nenhum arquivo (nela, navegar é com as setas, **marcar é com a barra de espaço** — Enter só confirma) e o programa seguiu por mais seis perguntas (sufixo, idioma, sobrescrita, retomada, simulação) antes de falhar com `"informe ao menos um arquivo ou pasta em --input"`. Agora `filepicker.PickFiles` avisa na hora, lembrando da barra de espaço, e oferece tentar de novo (limite de 3 tentativas); `ocr-pdf` e `merge-pdf` — que tinham o mesmo laço de escolha de entradas duplicado — ganharam a mesma validação antecipada, garantindo que o fluxo nunca avança para as perguntas seguintes com zero entradas escolhidas. Uma pasta sem nenhum arquivo da extensão pedida também é avisada no ato (pasta e extensão citadas), em vez de apresentar uma lista vazia. Mesmo padrão já corrigido em `organize-pdf` na v0.2.1, que a ferramenta nova (`ocr-pdf`, v0.11.0) não tinha herdado.
 - **A dica de `survey.MultiSelect` (usada para marcar vários arquivos) estava em inglês.** A tradução do template de `survey.Select` na v0.2.1 não cobriu o de escolha múltipla, que seguiu exibindo `[Use arrows to move, space to select, ...]` — a única parte em inglês de uma interface inteiramente em português, e exatamente a informação que faltou no relato acima. Agora `[use ↑ ↓ para navegar, ESPAÇO para marcar, → marca todos, ← desmarca todos, digite para filtrar, Enter para confirmar]`.
+
+## [0.12.0] - 2026-08-11
+
+### Adicionado
+
+- **`file-manager --version` (e o atalho `-v`), além do subcomando `version` já existente.** `--version` é convenção praticamente universal em CLIs — quem digitava por reflexo recebia "flag desconhecida" e código de saída 1, a impressão de programa mal-acabado por uma lacuna de uma linha. As duas formas convivem: o subcomando não foi removido (quem já o usa, inclusive `internal/selfupdate.VerifyBinary`, continua funcionando sem mudança) e ambas imprimem **exatamente o mesmo texto**. O template padrão do cobra formataria `--version` de um jeito diferente do subcomando (`file-manager version v0.12.0 (...)` vs. `v0.12.0 (...)`) — ter duas saídas para a mesma informação quebraria qualquer script feito em cima de uma das duas. A descrição da flag em `--help` também sai em português (`mostra a versão do binário`), como o resto da ajuda.
 
 ## [0.11.0] - 2026-08-11
 
