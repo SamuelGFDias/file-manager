@@ -18,6 +18,18 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.8.0] - 2026-08-11
+
+### Adicionado
+
+- **Completação de valores de flag no shell (Tab).** O cobra já completava nomes de comando e de flag; agora também completa **valores**. Enums fixos: `split-pdf --mode` (`page`/`range`/`regex`), `--ocr` em `split-pdf`/`organize-pdf` (`auto`/`always`/`never`), `organize-pdf --report-format` (`csv`/`json`), `merge-pdf --sort` (`name`/`mtime`). Valores dinâmicos, lidos de verdade do sistema: `undo --id` oferece só os identificadores de operações que ainda podem ser desfeitas (manifestos já desfeitos ficam de fora, para não levar a um erro evitável), `profiles list --tool` e `profiles export --tool` oferecem só as ferramentas que suportam perfis salvos, e `profiles import --file` filtra por extensão de perfil (`yaml`/`yml`) delegando ao cobra em vez de listar candidatos manualmente. `--ocr-lang` tenta listar os idiomas de fato instalados via `tesseract --list-langs`, com um limite de 300ms — sem o tesseract disponível, ou se ele não responder a tempo, cai na lista fixa conhecida (`por`, `eng`) em vez de travar a tecla Tab.
+- **Nenhuma função de completação propaga erro, nunca.** Uma falha ao consultar perfis salvos ou histórico de operações (ex: diretório de configuração inacessível) resulta em lista vazia, jamais em mensagem de erro no meio da linha de comando — um Tab que cospe erro é pior do que um Tab que não completa nada.
+
+### Alterado
+
+- **O comando `completion` (acrescentado automaticamente pelo cobra) saiu da lista de comandos em `--help`.** É a única peça deste CLI em inglês, junto de `help` e do texto de `--help` — e aparecia em destaque para o usuário final que abre o `.exe` com duplo clique e nunca vai escrever uma linha de shell. Ele continua **funcionando normalmente** para quem o invoca diretamente (`file-manager completion zsh`); só a funcionalidade de esconder foi usada (`CompletionOptions.HiddenDefaultCmd`), nunca a de desativar (`DisableDefaultCmd`), que prejudicaria quem usa terminal sem beneficiar ninguém.
+- O comando `help` e o texto da flag `--help` foram traduzidos para português (eram os últimos textos em inglês do programa, fora do próprio `completion`). O texto de cada subcomando do `completion` (`completion bash`, `completion zsh`, etc.) continua em inglês — não é razoavelmente configurável sem reescrever lógica interna do cobra, e o custo é baixo já que o comando está escondido de `--help`.
+
 ## [0.6.0] - 2026-08-11
 
 ### Adicionado

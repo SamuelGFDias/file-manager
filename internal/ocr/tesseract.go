@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ErrNotInstalled indica que o executável tesseract não foi encontrado.
@@ -198,6 +199,70 @@ func (t *Tesseract) HasLanguage(lang string) bool {
 		}
 	}
 	return false
+}
+
+// completionLanguageTimeout limita quanto tempo CompletionLanguages espera
+// pelo processo tesseract antes de desistir e devolver a lista fixa: a
+// completação de shell (Tab) nunca pode travar esperando um processo
+// externo responder.
+const completionLanguageTimeout = 300 * time.Millisecond
+
+// completionLanguageNames traduz para português os códigos de idioma mais
+// comuns do Tesseract, usados como descrição na completação de
+// --ocr-lang. Um código sem entrada aqui ainda aparece na completação, só
+// sem descrição.
+var completionLanguageNames = map[string]string{
+	"por": "Português",
+	"eng": "Inglês",
+	"spa": "Espanhol",
+}
+
+// CompletionLanguages devolve os candidatos para a completação de shell da
+// flag --ocr-lang, no formato "<código>\t<descrição>" esperado por
+// cobra.RegisterFlagCompletionFunc (a descrição some no bash, mas aparece
+// ao lado da opção no zsh). Tenta consultar os idiomas de fato instalados
+// via "tesseract --list-langs", com um limite de tempo curto
+// (completionLanguageTimeout): se o tesseract não estiver instalado, ou não
+// responder a tempo, devolve a lista fixa conhecida ("por", "eng") em vez
+// de travar a tecla Tab do usuário. Nunca devolve erro.
+func CompletionLanguages() []string {
+	fixed := []string{
+		"por\t" + completionLanguageNames["por"],
+		"eng\t" + completionLanguageNames["eng"],
+	}
+
+	engine := NewTesseract()
+	if !engine.Available() {
+		return fixed
+	}
+
+	type result struct {
+		langs []string
+		err   error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		langs, err := engine.Languages()
+		ch <- result{langs: langs, err: err}
+	}()
+
+	select {
+	case r := <-ch:
+		if r.err != nil || len(r.langs) == 0 {
+			return fixed
+		}
+		out := make([]string, 0, len(r.langs))
+		for _, l := range r.langs {
+			if name, ok := completionLanguageNames[l]; ok {
+				out = append(out, l+"\t"+name)
+			} else {
+				out = append(out, l)
+			}
+		}
+		return out
+	case <-time.After(completionLanguageTimeout):
+		return fixed
+	}
 }
 
 // InstallHint devolve uma instrução de instalação adequada ao sistema

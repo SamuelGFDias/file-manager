@@ -75,6 +75,34 @@ func NewRootCommand(v Version) *cobra.Command {
 	root.AddCommand(newProfilesCommand())
 	root.AddCommand(newUndoCommand())
 
+	// O cobra acrescenta sozinho um subcomando "completion" — a única peça
+	// deste CLI em inglês, junto de "help" e do texto de --help, e que
+	// aparece em destaque na ajuda para um público (o usuário final que abre
+	// o .exe com duplo clique) que nunca vai usar shell nenhum.
+	// HiddenDefaultCmd tira "completion" da lista de comandos sem removê-lo:
+	// continua funcionando para quem o invoca diretamente
+	// ("file-manager completion zsh"), só não aparece mais em "--help".
+	// DisableDefaultCmd (que removeria a funcionalidade de verdade) não é
+	// usado de propósito: prejudicaria quem usa terminal sem beneficiar
+	// ninguém.
+	root.CompletionOptions.HiddenDefaultCmd = true
+
+	// Traduz o texto de --help ("help for <comando>" no cobra padrão) para
+	// português. Registrado como flag PERSISTENTE do comando raiz (em vez de
+	// deixar o cobra criar, sob demanda, uma flag local "help" por comando
+	// com InitDefaultHelpFlag) para que o mesmo texto em português valha
+	// para o comando raiz e para todo subcomando: como cada subcomando
+	// herda as flags persistentes de seus ancestrais antes de
+	// InitDefaultHelpFlag rodar, o cobra encontra "help" já registrada e
+	// não cria a versão em inglês por cima. O efeito colateral é cosmético:
+	// --help passa a aparecer em "Global Flags" em vez de "Flags" no help
+	// de cada subcomando.
+	root.PersistentFlags().BoolP("help", "h", false, "ajuda sobre este comando")
+
+	// Substitui o comando "help" padrão do cobra (Short "Help about any
+	// command", em inglês) por uma versão em português — ver help.go.
+	root.SetHelpCommand(newHelpCommand(root))
+
 	return root
 }
 
@@ -163,8 +191,24 @@ func newProfilesListCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&toolID, "tool", "", "Filtra por ID da ferramenta")
+	_ = cmd.RegisterFlagCompletionFunc("tool", profileToolCompletion)
 
 	return cmd
+}
+
+// profileToolCompletion completa a flag "--tool" (usada por "profiles
+// list" e "profiles export") com os IDs das ferramentas que suportam
+// perfis salvos, junto do título como descrição (ex: "merge-pdf\tUnir
+// PDFs" — o texto depois do TAB vira a descrição mostrada pelo zsh ao lado
+// de cada opção). A lista vem inteiramente de Tools(), que não faz I/O, e
+// por isso nunca precisa de tratamento de erro.
+func profileToolCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	supported := profiles.SupportingTools(Tools())
+	out := make([]string, 0, len(supported))
+	for _, t := range supported {
+		out = append(out, fmt.Sprintf("%s\t%s", t.Meta().ID, t.Meta().Title))
+	}
+	return out, cobra.ShellCompDirectiveNoFileComp
 }
 
 // newProfilesExportCommand monta o subcomando "profiles export".
@@ -196,6 +240,7 @@ func newProfilesExportCommand() *cobra.Command {
 	_ = cmd.MarkFlagRequired("tool")
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.MarkFlagRequired("output")
+	_ = cmd.RegisterFlagCompletionFunc("tool", profileToolCompletion)
 
 	return cmd
 }
@@ -262,6 +307,13 @@ func newProfilesImportCommand() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Sobrescreve o nome do perfil importado")
 	cmd.Flags().BoolVar(&force, "force", false, "Sobrescreve um perfil existente com o mesmo nome")
 	_ = cmd.MarkFlagRequired("file")
+	// Um perfil exportado é sempre um YAML (config.ExportProfile grava o
+	// mesmo envelope config.Profile usado internamente) — deixa o cobra
+	// completar arquivos, filtrando pela extensão em vez de listar
+	// candidatos manualmente.
+	_ = cmd.RegisterFlagCompletionFunc("file", cobra.FixedCompletions(
+		[]string{"yaml", "yml"}, cobra.ShellCompDirectiveFilterFileExt,
+	))
 
 	return cmd
 }

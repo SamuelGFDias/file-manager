@@ -187,3 +187,42 @@ func generateTestImage(t *testing.T) string {
 
 	return path
 }
+
+// TestCompletionLanguagesFallsBackWithoutTesseract prova que, sem o
+// tesseract disponível (PATH e TESSERACT_PATH isolados), CompletionLanguages
+// devolve a lista fixa conhecida ("por", "eng") em vez de tentar rodar o
+// processo externo — e nunca erro, nunca panic.
+func TestCompletionLanguagesFallsBackWithoutTesseract(t *testing.T) {
+	t.Setenv("PATH", "/nao-existe/bin")
+	t.Setenv("TESSERACT_PATH", "/nao-existe/tesseract")
+
+	got := CompletionLanguages()
+
+	if len(got) != 2 {
+		t.Fatalf("CompletionLanguages() sem tesseract = %v, esperava 2 entradas", got)
+	}
+	if !strings.HasPrefix(got[0], "por\t") {
+		t.Errorf("CompletionLanguages()[0] = %q, esperava prefixo \"por\\t\"", got[0])
+	}
+	if !strings.HasPrefix(got[1], "eng\t") {
+		t.Errorf("CompletionLanguages()[1] = %q, esperava prefixo \"eng\\t\"", got[1])
+	}
+}
+
+// TestCompletionLanguagesNeverBlocksLong garante que CompletionLanguages
+// devolve dentro de um tempo curto, independente do estado do sistema —
+// requisito central da completação de shell: a tecla Tab nunca pode
+// travar esperando um processo externo.
+func TestCompletionLanguagesNeverBlocksLong(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		CompletionLanguages()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("CompletionLanguages() não retornou em 2s")
+	}
+}

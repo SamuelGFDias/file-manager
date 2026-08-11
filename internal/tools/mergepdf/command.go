@@ -200,6 +200,9 @@ func (t *Tool) Command() *cobra.Command {
 
 	_ = cmd.MarkFlagRequired("input")
 	_ = cmd.MarkFlagRequired("output")
+	_ = cmd.RegisterFlagCompletionFunc("sort", cobra.FixedCompletions(
+		[]string{"name", "mtime"}, cobra.ShellCompDirectiveNoFileComp,
+	))
 
 	return cmd
 }

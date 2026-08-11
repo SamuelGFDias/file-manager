@@ -283,6 +283,15 @@ func (t *Tool) Command() *cobra.Command {
 
 	tool.BindAll(cmd.Flags(), t.params())
 	_ = cmd.MarkFlagRequired("input")
+	_ = cmd.RegisterFlagCompletionFunc("mode", cobra.FixedCompletions(
+		modeOrder, cobra.ShellCompDirectiveNoFileComp,
+	))
+	_ = cmd.RegisterFlagCompletionFunc("ocr", cobra.FixedCompletions(
+		[]string{"auto", "always", "never"}, cobra.ShellCompDirectiveNoFileComp,
+	))
+	_ = cmd.RegisterFlagCompletionFunc("ocr-lang", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return ocr.CompletionLanguages(), cobra.ShellCompDirectiveNoFileComp
+	})
 
 	return cmd
 }
