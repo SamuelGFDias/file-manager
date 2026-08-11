@@ -34,7 +34,7 @@ file-manager
 
 Cada ferramenta também funciona com flags de linha de comando. Use `file-manager <ferramenta> --help` para ver as opções de uma ferramenta específica.
 
-Para ver a versão instalada: `file-manager --version` (ou o atalho `-v`) ou `file-manager version` — as duas formas imprimem exatamente o mesmo texto.
+Para ver a versão instalada: `file-manager --version` (ou o atalho `-v`) ou `file-manager version` — as duas formas imprimem exatamente o mesmo texto. Rodando num terminal, logo abaixo da versão também aparece um aviso quando há uma versão mais nova publicada (com a mesma distinção de correção/novidade/incompatibilidade da seção [Atualização](#atualização)). Isso não acontece quando a saída é redirecionada ou canalizada (`file-manager --version > arquivo`, `file-manager --version | head -1`): nesse caso a saída continua sendo, hoje como sempre, só a linha da versão — imediata e sem consultar a rede — para não quebrar scripts.
 
 ## Ferramentas
 
@@ -306,6 +306,8 @@ file-manager update --check   # só verifica
 Se já estiver na última versão, o comando informa e sai sem erro. Antes de substituir o executável atual, o binário baixado é executado para validação — um download corrompido aborta a atualização sem tocar no executável em uso.
 
 Além disso, o menu principal verifica em segundo plano (uma vez por sessão) se há uma versão mais nova. Na primeira abertura, o menu aguarda um instante (no máximo 1,5s) pelo resultado dessa verificação e, se houver versão mais nova, exibe um aviso com a progressão de versão e o comando para atualizar. Sem internet, ou se a verificação não chegar a tempo, o menu abre normalmente e nenhum aviso aparece.
+
+`file-manager --version`/`-v`/`version` fazem a mesma verificação, com o mesmo texto, mas só quando a saída é um terminal (ver [Uso rápido](#uso-rápido)) — e com paciência ainda mais curta (no máximo 1s): quem pede a versão espera resposta imediata, o aviso é um extra sobre essa resposta. O aviso sai pela saída de erro (stderr), não pela saída padrão, então capturar só a versão (`versao=$(file-manager --version)`) nunca traz o aviso junto.
 
 ### Três tipos de aviso
 
