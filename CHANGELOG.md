@@ -18,6 +18,13 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.4.0] - 2026-08-11
+
+### Adicionado
+
+- **Exportação e importação de perfis.** Quem calibra as regras de um perfil e quem usa a ferramenta no dia a dia costumam ser pessoas diferentes, em máquinas diferentes — até aqui o perfil calibrado ficava preso ao diretório de configuração da máquina onde foi criado, sem nenhum caminho para sair de lá. Novo comando `file-manager profiles export --tool <id> --name <perfil> --output <arquivo.yaml>` grava o perfil num arquivo; `file-manager profiles import --file <arquivo.yaml> [--name <novo-nome>] [--force]` lê esse arquivo de volta, valida que a ferramenta declarada existe e suporta perfis, e valida o conteúdo contra as opções dessa ferramenta antes de gravar — um arquivo corrompido ou de versão incompatível falha na importação, não no meio de um lote processado com dados errados. Também novos: `file-manager profiles list [--tool <id>]` (agrupado por ferramenta) e `file-manager profiles path` (mostra onde os perfis ficam guardados). A tela interativa de perfis ganhou as ações "Exportar para arquivo" e "Importar de arquivo" no mesmo menu usado por todas as ferramentas.
+- O arquivo exportado é exatamente o mesmo envelope YAML usado internamente para persistir perfis — exportação e importação são simétricas por construção, sem um segundo formato a manter sincronizado. Novas funções em `internal/config`: `ExportProfile`, `ReadProfileFile`, `ImportProfile`.
+
 ## [0.3.1] - 2026-08-11
 
 ### Corrigido

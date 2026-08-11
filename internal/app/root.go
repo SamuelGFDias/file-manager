@@ -10,10 +10,13 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/SamuelGFDias/file-manager/internal/config"
 	"github.com/SamuelGFDias/file-manager/internal/selfupdate"
+	"github.com/SamuelGFDias/file-manager/internal/tool"
 	"github.com/SamuelGFDias/file-manager/internal/ui"
 	"github.com/SamuelGFDias/file-manager/internal/ui/docs"
 	"github.com/SamuelGFDias/file-manager/internal/ui/mainmenu"
+	"github.com/SamuelGFDias/file-manager/internal/ui/profiles"
 )
 
 // Version reúne as informações de versão do binário, normalmente
@@ -69,8 +72,216 @@ func NewRootCommand(v Version) *cobra.Command {
 	root.AddCommand(newDocsCommand(v))
 	root.AddCommand(newVersionCommand(v))
 	root.AddCommand(newUpdateCommand(v))
+	root.AddCommand(newProfilesCommand())
 
 	return root
+}
+
+// newProfilesCommand monta o comando pai "profiles" e seus quatro
+// subcomandos (list, export, import, path). É o caminho de linha de comando
+// para o fluxo "calibrar numa máquina, usar em outra": a tela interativa
+// (internal/ui/profiles) cobre o mesmo CRUD para quem prefere navegar por
+// menu, mas exportar/importar por arquivo também precisa funcionar sem
+// terminal interativo (ex: dentro de um script).
+func newProfilesCommand() *cobra.Command {
+	profilesCmd := &cobra.Command{
+		Use:   "profiles",
+		Short: "Gerencia perfis salvos das ferramentas",
+		Long: "Gerencia perfis salvos das ferramentas: listar, exportar para um arquivo, " +
+			"importar de um arquivo recebido de outra pessoa, e localizar o diretório onde " +
+			"ficam guardados.",
+	}
+
+	profilesCmd.AddCommand(newProfilesListCommand())
+	profilesCmd.AddCommand(newProfilesExportCommand())
+	profilesCmd.AddCommand(newProfilesImportCommand())
+	profilesCmd.AddCommand(newProfilesPathCommand())
+
+	return profilesCmd
+}
+
+// newProfilesListCommand monta o subcomando "profiles list". Sem --tool,
+// lista os perfis de todas as ferramentas que suportam perfis, agrupados
+// por ferramenta.
+func newProfilesListCommand() *cobra.Command {
+	var toolID string
+
+	cmd := &cobra.Command{
+		Use:          "list",
+		Short:        "Lista os perfis salvos",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			supported := profiles.SupportingTools(Tools())
+
+			if toolID != "" {
+				var match tool.Tool
+				for _, t := range supported {
+					if t.Meta().ID == toolID {
+						match = t
+						break
+					}
+				}
+				if match == nil {
+					return fmt.Errorf("ferramenta %q não existe ou não suporta perfis", toolID)
+				}
+				supported = []tool.Tool{match}
+			}
+
+			if len(supported) == 0 {
+				ui.Infof("Nenhuma ferramenta deste CLI suporta perfis salvos.")
+				return nil
+			}
+
+			foundAny := false
+			for _, t := range supported {
+				names, err := config.List(t.Meta().ID)
+				if err != nil {
+					return fmt.Errorf("erro ao listar perfis de %q: %w", t.Meta().ID, err)
+				}
+				if len(names) == 0 {
+					continue
+				}
+
+				foundAny = true
+				ui.Infof("%s:", ui.Bold(t.Meta().Title))
+				for _, name := range names {
+					path, err := config.ProfilePath(t.Meta().ID, name)
+					if err != nil {
+						return err
+					}
+					ui.Infof("  %s — %s", name, ui.PathText(path))
+				}
+			}
+
+			if !foundAny {
+				ui.Infof("Nenhum perfil salvo encontrado.")
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&toolID, "tool", "", "Filtra por ID da ferramenta")
+
+	return cmd
+}
+
+// newProfilesExportCommand monta o subcomando "profiles export".
+func newProfilesExportCommand() *cobra.Command {
+	var toolID, name, output string
+
+	cmd := &cobra.Command{
+		Use:          "export",
+		Short:        "Exporta um perfil salvo para um arquivo",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := config.ExportProfile(toolID, name, output); err != nil {
+				return err
+			}
+
+			abs, absErr := filepath.Abs(output)
+			if absErr != nil {
+				abs = output
+			}
+
+			ui.Successf("Perfil %q exportado para %s", name, abs)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&toolID, "tool", "", "ID da ferramenta dona do perfil")
+	cmd.Flags().StringVar(&name, "name", "", "Nome do perfil a exportar")
+	cmd.Flags().StringVar(&output, "output", "", "Caminho do arquivo de saída")
+	_ = cmd.MarkFlagRequired("tool")
+	_ = cmd.MarkFlagRequired("name")
+	_ = cmd.MarkFlagRequired("output")
+
+	return cmd
+}
+
+// newProfilesImportCommand monta o subcomando "profiles import". Valida que
+// a ferramenta declarada no arquivo existe e suporta perfis, e que o
+// conteúdo de "data" decodifica na struct de Options dessa ferramenta —
+// um arquivo corrompido ou de versão incompatível falha aqui, na
+// importação, em vez de falhar mais tarde ao tentar usar o perfil.
+func newProfilesImportCommand() *cobra.Command {
+	var file, name string
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:          "import",
+		Short:        "Importa um perfil de um arquivo",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			imported, err := config.ReadProfileFile(file)
+			if err != nil {
+				return err
+			}
+
+			var match tool.Tool
+			for _, t := range Tools() {
+				if t.Meta().ID == imported.Tool {
+					match = t
+					break
+				}
+			}
+			if match == nil {
+				return fmt.Errorf(
+					"o arquivo %q referencia a ferramenta %q, que não existe neste CLI",
+					file, imported.Tool,
+				)
+			}
+			if match.Profile() == nil {
+				return fmt.Errorf("a ferramenta %q não suporta perfis salvos", imported.Tool)
+			}
+
+			target := imported.Name
+			if name != "" {
+				target = name
+			}
+			if err := config.ValidateName(target); err != nil {
+				return fmt.Errorf("nome de destino inválido: %w", err)
+			}
+
+			empty := match.Profile().Empty()
+			if err := imported.Node.Decode(empty); err != nil {
+				return config.DecodeError(imported.Tool, file, err)
+			}
+
+			if err := config.ImportProfile(imported, target, force); err != nil {
+				return err
+			}
+
+			ui.Successf("Perfil %q importado com sucesso para a ferramenta %q.", target, imported.Tool)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&file, "file", "", "Caminho do arquivo de perfil a importar")
+	cmd.Flags().StringVar(&name, "name", "", "Sobrescreve o nome do perfil importado")
+	cmd.Flags().BoolVar(&force, "force", false, "Sobrescreve um perfil existente com o mesmo nome")
+	_ = cmd.MarkFlagRequired("file")
+
+	return cmd
+}
+
+// newProfilesPathCommand monta o subcomando "profiles path": imprime o
+// diretório onde os perfis são guardados, para o usuário achar os arquivos
+// sem precisar saber de os.UserConfigDir.
+func newProfilesPathCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "path",
+		Short:        "Mostra o diretório onde os perfis são guardados",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			base, err := config.BaseDir()
+			if err != nil {
+				return err
+			}
+			fmt.Println(filepath.Join(base, "profiles"))
+			return nil
+		},
+	}
 }
 
 // newDocsCommand monta o subcomando "docs" e seu subcomando "export".
