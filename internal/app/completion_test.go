@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -121,7 +122,7 @@ func TestUndoIDCompletionEmptyHistory(t *testing.T) {
 func TestUndoIDCompletionOnlyPending(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	if _, err := history.Save(history.Manifest{
+	if _, _, err := history.Save(history.Manifest{
 		Tool:      "organize-pdf",
 		CreatedAt: time.Now(),
 		InputDir:  "/tmp/origem-pendente",
@@ -130,7 +131,7 @@ func TestUndoIDCompletionOnlyPending(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("history.Save(pendente): %v", err)
 	}
-	if _, err := history.Save(history.Manifest{
+	if _, _, err := history.Save(history.Manifest{
 		Tool:      "organize-pdf",
 		CreatedAt: time.Now().Add(-time.Hour),
 		InputDir:  "/tmp/origem-desfeita",
@@ -144,14 +145,14 @@ func TestUndoIDCompletionOnlyPending(t *testing.T) {
 	// o ID gerado não volta para o struct do chamador) — recarrega a lista
 	// para achar o ID de verdade do manifesto que este teste quer marcar
 	// como já desfeito.
-	manifests, err := history.List()
+	headers, _, err := history.List()
 	if err != nil {
 		t.Fatalf("history.List(): %v", err)
 	}
-	for _, m := range manifests {
-		if m.InputDir == "/tmp/origem-desfeita" {
-			if err := history.MarkUndone(m.ID, time.Now()); err != nil {
-				t.Fatalf("history.MarkUndone(%q): %v", m.ID, err)
+	for _, h := range headers {
+		if h.InputDir == "/tmp/origem-desfeita" {
+			if err := history.MarkUndone(h.ID, time.Now()); err != nil {
+				t.Fatalf("history.MarkUndone(%q): %v", h.ID, err)
 			}
 		}
 	}
@@ -194,6 +195,58 @@ func TestUndoIDCompletionMissingConfigDirNeverFails(t *testing.T) {
 		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
 	}
 	_ = got // não deve haver panic nem erro; conteúdo exato não importa aqui
+}
+
+// TestUndoIDCompletionIgnoresCorruptedManifestWarnings garante que a
+// completação de --id continua funcionando com um manifesto corrompido no
+// diretório de histórico — oferecendo o(s) manifesto(s) íntegro(s)
+// normalmente — e, ao contrário de "undo --list" (ver
+// TestPrintUndoListWarnsAboutCorruptedManifest, em undo_test.go), NUNCA
+// imprime o aviso: um Tab não pode cuspir aviso no meio da linha de
+// comando que o usuário está digitando.
+func TestUndoIDCompletionIgnoresCorruptedManifestWarnings(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if _, _, err := history.Save(history.Manifest{
+		Tool:      "organize-pdf",
+		CreatedAt: time.Now(),
+		InputDir:  "/tmp/origem-integra",
+		OutputDir: "/tmp/destino-integro",
+		Action:    history.ActionCopy,
+	}); err != nil {
+		t.Fatalf("history.Save(): %v", err)
+	}
+
+	dir, err := history.Dir()
+	if err != nil {
+		t.Fatalf("history.Dir(): %v", err)
+	}
+	corrupted := dir + "/20261231-235959.yaml"
+	if err := os.WriteFile(corrupted, []byte("isto: [nao é yaml válido"), 0o644); err != nil {
+		t.Fatalf("criar manifesto corrompido: %v", err)
+	}
+
+	cmd := findSubcommand(t, NewRootCommand(testVersion()), "undo")
+	fn, ok := cmd.GetFlagCompletionFunc("id")
+	if !ok {
+		t.Fatal("nenhuma função de completação registrada para --id")
+	}
+
+	var got []string
+	var directive cobra.ShellCompDirective
+	out := captureStdout(t, func() {
+		got, directive = fn(cmd, nil, "")
+	})
+
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+	if len(got) != 1 || !strings.Contains(got[0], "/tmp/origem-integra") {
+		t.Fatalf("completação de --id = %v, esperava exatamente o manifesto íntegro", got)
+	}
+	if out != "" {
+		t.Fatalf("completação de --id não deveria imprimir nada (nem aviso do manifesto corrompido); saída:\n%s", out)
+	}
 }
 
 // --- profiles --tool ---

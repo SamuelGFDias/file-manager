@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SamuelGFDias/file-manager/internal/history"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 func TestParseLevelFlagsBasic(t *testing.T) {
@@ -414,26 +416,36 @@ func TestRunWritesHistoryManifestOnRealMove(t *testing.T) {
 		t.Fatalf("run() erro inesperado: %v", err)
 	}
 
-	manifests, err := history.List()
+	headers, _, err := history.List()
 	if err != nil {
 		t.Fatalf("history.List() erro inesperado: %v", err)
 	}
-	if len(manifests) != 1 {
-		t.Fatalf("esperava 1 manifesto gravado, obteve %d", len(manifests))
+	if len(headers) != 1 {
+		t.Fatalf("esperava 1 manifesto gravado, obteve %d", len(headers))
 	}
 
-	m := manifests[0]
+	m := headers[0]
 	if m.Tool != "organize-pdf" {
 		t.Errorf("Tool = %q, esperava %q", m.Tool, "organize-pdf")
 	}
 	if m.Action != history.ActionMove {
 		t.Errorf("Action = %q, esperava %q", m.Action, history.ActionMove)
 	}
-	if len(m.Entries) != 1 {
-		t.Fatalf("esperava 1 entrada no manifesto, obteve %d: %+v", len(m.Entries), m.Entries)
+	if m.EntryCount != 1 {
+		t.Fatalf("esperava 1 entrada no manifesto, obteve %d", m.EntryCount)
 	}
 	if !filepath.IsAbs(m.InputDir) || !filepath.IsAbs(m.OutputDir) {
 		t.Errorf("InputDir/OutputDir do manifesto deveriam ser absolutos: %q / %q", m.InputDir, m.OutputDir)
+	}
+
+	// Load() continua devolvendo o Manifest completo, com Entries — é o
+	// que o desfazer usa; List() (acima) só devolve o cabeçalho.
+	full, err := history.Load(m.ID)
+	if err != nil {
+		t.Fatalf("history.Load(%q) erro inesperado: %v", m.ID, err)
+	}
+	if len(full.Entries) != 1 {
+		t.Fatalf("esperava 1 entrada em Load(), obteve %d: %+v", len(full.Entries), full.Entries)
 	}
 }
 
@@ -463,12 +475,90 @@ func TestRunDryRunDoesNotWriteHistoryManifest(t *testing.T) {
 		t.Fatalf("run() erro inesperado: %v", err)
 	}
 
-	manifests, err := history.List()
+	headers, _, err := history.List()
 	if err != nil {
 		t.Fatalf("history.List() erro inesperado: %v", err)
 	}
-	if len(manifests) != 0 {
-		t.Fatalf("esperava 0 manifestos após DryRun, obteve %d: %+v", len(manifests), manifests)
+	if len(headers) != 0 {
+		t.Fatalf("esperava 0 manifestos após DryRun, obteve %d: %+v", len(headers), headers)
+	}
+}
+
+// TestRunReportsPrunedPendingManifestsInDetails prova a ponta a ponta do
+// aviso pedido: quando a poda automática disparada por history.Save (ver
+// historyRecorder) remove um manifesto PENDENTE (nunca desfeito) — não
+// apenas um já desfeito —, isso precisa aparecer em Result.Details. Apagar
+// em silêncio a capacidade de desfazer uma operação seria exatamente a
+// surpresa que este projeto existe para evitar.
+//
+// O manifesto antigo é criado via history.Save (com CreatedAt recente, para
+// não ser podado na hora) e depois tem created_at reescrito DIRETAMENTE no
+// arquivo, contornando uma segunda chamada a Save — que já dispararia a
+// poda automática e removeria o próprio manifesto no ato de criá-lo "velho
+// o bastante". Só a poda disparada pela gravação REAL feita pelo run() de
+// organize-pdf, abaixo, deve alcançá-lo.
+func TestRunReportsPrunedPendingManifestsInDetails(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	path, _, err := history.Save(history.Manifest{
+		Tool:      "organize-pdf",
+		InputDir:  "/tmp/origem-antiga",
+		OutputDir: "/tmp/destino-antigo",
+		Action:    history.ActionCopy,
+	})
+	if err != nil {
+		t.Fatalf("history.Save(manifesto antigo): %v", err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ler manifesto antigo: %v", err)
+	}
+	var old history.Manifest
+	if err := yaml.Unmarshal(raw, &old); err != nil {
+		t.Fatalf("decodificar manifesto antigo: %v", err)
+	}
+	old.CreatedAt = time.Now().Add(-(history.PrunePendingAfter + 24*time.Hour))
+	rewritten, err := yaml.Marshal(&old)
+	if err != nil {
+		t.Fatalf("recodificar manifesto antigo: %v", err)
+	}
+	if err := os.WriteFile(path, rewritten, 0o644); err != nil {
+		t.Fatalf("regravar manifesto antigo com created_at antigo: %v", err)
+	}
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(inputDir, "doc.pdf"), []byte("conteudo qualquer"), 0o644); err != nil {
+		t.Fatalf("criar pdf de teste: %v", err)
+	}
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:        inputDir,
+		OutputDir:       outputDir,
+		Move:            true,
+		UnclassifiedDir: "sem-classificacao",
+		OCR:             "never",
+	}
+
+	result, err := tl.run()
+	if err != nil {
+		t.Fatalf("run() erro inesperado: %v", err)
+	}
+
+	found := false
+	for _, d := range result.Details {
+		if strings.Contains(d, "removido") && strings.Contains(d, "desfeito") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("esperava um detalhe avisando sobre o manifesto pendente removido pela poda automática; Details = %v", result.Details)
+	}
+
+	if _, err := history.Load(old.ID); err == nil {
+		t.Fatalf("manifesto pendente antigo (%q) deveria ter sido removido pela poda automática", old.ID)
 	}
 }
 

@@ -143,14 +143,16 @@ func generateID(dir string, when time.Time) (string, error) {
 // Save grava m em disco, gerando m.ID automaticamente quando está vazio (a
 // partir de m.CreatedAt, ou do horário atual se CreatedAt também for zero) e
 // evitando colisão com um manifesto já existente (ver generateID). Devolve o
-// caminho do arquivo gravado.
-func Save(m Manifest) (path string, err error) {
+// caminho do arquivo gravado e os IDs de manifestos PENDENTES removidos
+// pela poda automática que Save dispara em seguida (ver comentário abaixo);
+// normalmente vazio.
+func Save(m Manifest) (path string, prunedPending []string, err error) {
 	dir, err := Dir()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("erro ao criar diretório de histórico %q: %w", dir, err)
+		return "", nil, fmt.Errorf("erro ao criar diretório de histórico %q: %w", dir, err)
 	}
 
 	if m.CreatedAt.IsZero() {
@@ -160,30 +162,39 @@ func Save(m Manifest) (path string, err error) {
 	if m.ID == "" {
 		id, err := generateID(dir, m.CreatedAt)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		m.ID = id
 	}
 
 	out, err := yaml.Marshal(&m)
 	if err != nil {
-		return "", fmt.Errorf("erro ao codificar manifesto %q: %w", m.ID, err)
+		return "", nil, fmt.Errorf("erro ao codificar manifesto %q: %w", m.ID, err)
 	}
 
 	p := manifestPath(dir, m.ID)
 	if err := os.WriteFile(p, out, 0o644); err != nil {
-		return "", fmt.Errorf("erro ao gravar manifesto em %q: %w", p, err)
+		return "", nil, fmt.Errorf("erro ao gravar manifesto em %q: %w", p, err)
 	}
 
-	// Poda best-effort de manifestos já desfeitos e expirados (ver Prune):
-	// mesmo princípio já usado para o próprio manifesto de histórico e para
-	// o relatório de organize-pdf — uma tarefa de manutenção secundária
-	// nunca pode fazer uma gravação que já aconteceu de verdade parecer que
-	// falhou. Erro aqui é silenciosamente ignorado; a próxima chamada a
-	// Save tenta de novo.
-	_, _ = Prune(time.Now(), PruneRetention)
+	// Poda best-effort de manifestos expirados (ver Prune/pruneDetailed):
+	// mesmo princípio já usado no projeto para o próprio manifesto de
+	// histórico e para o relatório de organize-pdf — uma tarefa de
+	// manutenção secundária nunca pode fazer uma gravação que já aconteceu
+	// de verdade parecer que falhou. O ERRO da poda é silenciosamente
+	// ignorado aqui; a próxima chamada a Save tenta de novo.
+	//
+	// O resultado (quais PENDENTES foram removidos), ao contrário do erro,
+	// NÃO é descartado: apagar um manifesto pendente tira, em silêncio, a
+	// capacidade de desfazer aquela operação — é exatamente o tipo de
+	// surpresa que este projeto evita. É responsabilidade do chamador (o
+	// comando organize-pdf) informar isso ao usuário via Result.Details. Um
+	// manifesto já desfeito removido pela mesma poda não entra em
+	// prunedPending: já cumpriu sua função, não há capacidade nenhuma
+	// sendo tirada.
+	pending, _, _ := pruneDetailed(time.Now(), PruneUndoneAfter, PrunePendingAfter, false)
 
-	return p, nil
+	return p, pending, nil
 }
 
 // Load carrega o manifesto de ID informado.
@@ -209,92 +220,228 @@ func Load(id string) (Manifest, error) {
 	return m, nil
 }
 
-// List devolve todos os manifestos gravados, mais recentes primeiro (por
-// CreatedAt; ID como desempate). Devolve um slice vazio (não um erro) quando
-// o diretório de histórico ainda não existe — nenhuma operação foi
-// registrada ainda, o que é um estado válido e esperado (ex: instalação
-// nova, ou nenhum organize-pdf real rodado até agora).
-func List() ([]Manifest, error) {
+// Header são os metadados de um manifesto, sem a lista de Entries — é o
+// que List() devolve. Ver o comentário de List() para o porquê de existir
+// separado de Manifest.
+type Header struct {
+	ID        string
+	Tool      string
+	CreatedAt time.Time
+	InputDir  string
+	OutputDir string
+	Action    Action
+	UndoneAt  *time.Time
+	// EntryCount é quantos arquivos a operação afetou (len(Manifest.Entries)
+	// no momento da gravação) — o suficiente para exibição ("12 arquivos")
+	// sem reter a lista inteira na memória depois que List() retorna.
+	EntryCount int
+}
+
+// ListDisplayLimit é quantos cabeçalhos "undo --list" e as telas
+// interativas de desfazer mostram por padrão (os mais recentes primeiro).
+// Um histórico com centenas de operações vira uma tela ilegível — pior
+// ainda num survey.Select, onde cada item extra é uma linha a mais para
+// navegar às cegas. Quem precisa ver mais usa --all (linha de comando) ou a
+// opção "Ver operações mais antigas" (telas interativas).
+const ListDisplayLimit = 20
+
+// List devolve os CABEÇALHOS de todos os manifestos gravados, mais
+// recentes primeiro (por CreatedAt; ID como desempate). Devolve um slice
+// vazio (não um erro) quando o diretório de histórico ainda não existe —
+// nenhuma operação foi registrada ainda, o que é um estado válido e
+// esperado (ex: instalação nova, ou nenhum organize-pdf real rodado até
+// agora).
+//
+// Um manifesto individual ilegível (arquivo truncado por disco cheio no
+// meio de uma gravação anterior, processo interrompido no momento errado,
+// YAML corrompido por qualquer outro motivo) NÃO interrompe a listagem: é
+// pulado e reportado em warnings — uma linha em português por arquivo
+// problemático, citando o nome do arquivo e o motivo —, e os demais
+// manifestos continuam aparecendo normalmente. err só é devolvido quando o
+// PRÓPRIO diretório de histórico não pode ser lido (ex: sem permissão);
+// nunca por causa de um arquivo individual dentro dele. Antes desta
+// distinção, um único manifesto corrompido derrubava List() inteiro — e
+// com ela o "undo" de TODAS as outras operações, inclusive as íntegras: o
+// pior lugar possível para um ponto único de falha, já que "undo" é
+// exatamente o recurso que existe para socorrer o usuário quando algo deu
+// errado.
+//
+// Custo de parse vs. memória retida: cada arquivo ainda precisa ser
+// decodificado por inteiro para contar EntryCount — não existe hoje um
+// índice separado com só os metadados, então o TEMPO de List() continua
+// proporcional ao tamanho total do histórico (isso é inevitável sem esse
+// índice). O que muda é a MEMÓRIA RETIDA depois que a função retorna: o
+// Manifest completo (incluindo o slice de Entries, potencialmente grande)
+// de cada arquivo sai de escopo assim que o Header correspondente é
+// montado, então o slice de Entries vira lixo para o GC ali mesmo, dentro
+// do laço — o que fica retido por manifesto passa a ser O(1) (os campos do
+// Header), nunca mais O(entradas). Se o histórico crescer a ponto do
+// CUSTO DE PARSE (não mais a memória) incomodar, um índice separado — um
+// arquivo pequeno só com os cabeçalhos, atualizado a cada Save/MarkUndone/
+// Prune — é a evolução natural (ver AGENTS.md, não implementado agora).
+func List() (headers []Header, warnings []string, err error) {
 	dir, err := Dir()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []Manifest{}, nil
+			return []Header{}, nil, nil
 		}
-		return nil, fmt.Errorf("erro ao listar diretório de histórico %q: %w", dir, err)
+		return nil, nil, fmt.Errorf("erro ao listar diretório de histórico %q: %w", dir, err)
 	}
 
-	manifests := make([]Manifest, 0, len(entries))
+	headers = make([]Header, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
+
 		id := strings.TrimSuffix(e.Name(), ".yaml")
-		m, err := Load(id)
-		if err != nil {
-			return nil, err
+
+		raw, readErr := os.ReadFile(filepath.Join(dir, e.Name()))
+		if readErr != nil {
+			warnings = append(warnings, fmt.Sprintf("erro ao ler manifesto de histórico %q: %v", e.Name(), readErr))
+			continue
 		}
-		manifests = append(manifests, m)
+
+		// m fica restrito a este bloco: uma vez que o Header abaixo é
+		// montado, m (e o slice potencialmente grande de m.Entries) sai de
+		// escopo e pode ser coletado pelo GC — ver o comentário de List()
+		// sobre memória retida.
+		var m Manifest
+		if decErr := yaml.Unmarshal(raw, &m); decErr != nil {
+			warnings = append(warnings, fmt.Sprintf("erro ao decodificar manifesto de histórico %q: %v", e.Name(), decErr))
+			continue
+		}
+
+		headers = append(headers, Header{
+			ID:         id,
+			Tool:       m.Tool,
+			CreatedAt:  m.CreatedAt,
+			InputDir:   m.InputDir,
+			OutputDir:  m.OutputDir,
+			Action:     m.Action,
+			UndoneAt:   m.UndoneAt,
+			EntryCount: len(m.Entries),
+		})
 	}
 
-	sort.SliceStable(manifests, func(i, j int) bool {
-		if !manifests[i].CreatedAt.Equal(manifests[j].CreatedAt) {
-			return manifests[i].CreatedAt.After(manifests[j].CreatedAt)
+	sort.SliceStable(headers, func(i, j int) bool {
+		if !headers[i].CreatedAt.Equal(headers[j].CreatedAt) {
+			return headers[i].CreatedAt.After(headers[j].CreatedAt)
 		}
-		return manifests[i].ID > manifests[j].ID
+		return headers[i].ID > headers[j].ID
 	})
 
-	return manifests, nil
+	return headers, warnings, nil
 }
 
-// PruneRetention é o tempo mínimo que um manifesto já desfeito continua no
+// PruneUndoneAfter é o tempo mínimo que um manifesto JÁ DESFEITO continua no
 // disco, contado a partir de UndoneAt, antes de se tornar elegível para
-// remoção por Prune. Só afeta manifestos JÁ desfeitos: um manifesto
-// pendente (UndoneAt == nil) nunca é removido automaticamente, por mais
-// antigo que seja — é exatamente ele que permite desfazer aquela operação,
-// e apagá-lo sem o usuário pedir tiraria essa capacidade em silêncio. Sem
-// essa distinção, "undo --list" e o diretório de histórico cresceriam sem
-// limite: uma operação real de organize-pdf gera um manifesto, e nada nunca
-// os removia.
-const PruneRetention = 30 * 24 * time.Hour
+// remoção por Prune. Um manifesto desfeito já cumpriu sua função — o único
+// motivo de mantê-lo por um tempo é permitir conferir o histórico recente,
+// não desfazer de novo (que exigiria --force de qualquer forma).
+const PruneUndoneAfter = 30 * 24 * time.Hour
 
-// Prune remove do disco os manifestos já desfeitos (UndoneAt != nil) há mais
-// de retention, contado a partir de now. Devolve os IDs efetivamente
-// removidos (nunca nil; slice vazio quando nada foi removido). Nenhum
-// manifesto pendente é tocado — ver PruneRetention. Erro ao listar o
-// diretório de histórico é propagado; erro ao remover um manifesto
-// específico interrompe a poda e devolve, junto do erro, os IDs já
-// removidos até ali (nunca deixa a chamadora sem saber o que já foi feito).
-func Prune(now time.Time, retention time.Duration) ([]string, error) {
+// PrunePendingAfter é o tempo mínimo que um manifesto PENDENTE (nunca
+// desfeito) continua no disco, contado a partir de CreatedAt, antes de se
+// tornar elegível para remoção por Prune. Existe separado — e bem mais
+// longo — de PruneUndoneAfter porque remover um pendente tira, de verdade,
+// a capacidade de desfazer aquela operação; a justificativa aqui não é
+// "já cumpriu a função" (como para os desfeitos), e sim que desfazer algo
+// de 6 meses atrás deixou de ser realista: o destino provavelmente já foi
+// reorganizado, movido ou apagado por fora do file-manager, e o "tamanho
+// mudou" (SkipSizeChanged) tornaria o desfazer inútil de qualquer forma.
+// Sem esta poda, o caso mais comum de uso — organizar e nunca desfazer —
+// acumulava um manifesto pendente por execução, para sempre: só a poda dos
+// já desfeitos (que é rara, poucos usuários chegam a desfazer) não
+// resolvia nada para a maioria de quem usa a ferramenta.
+const PrunePendingAfter = 180 * 24 * time.Hour
+
+// pruneDetailed é a implementação real de Prune e PrunePlan: percorre os
+// cabeçalhos do histórico (via List(), que já tolera manifesto ilegível —
+// ver seu comentário) e separa os candidatos a poda em duas categorias,
+// PENDENTES e JÁ DESFEITOS, porque o chamador (Save, ver seu comentário)
+// precisa saber qual categoria perdeu manifestos para decidir se avisa o
+// usuário. dryRun segue o mesmo idioma já usado por Undo (dryRun, force)
+// neste pacote: true calcula o que SERIA removido sem tocar em nada no
+// disco (usado por PrunePlan, para "undo --prune" poder pedir confirmação
+// antes de apagar de verdade); false remove de fato (usado por Prune).
+//
+// Erro ao remover um manifesto específico interrompe a poda e devolve,
+// junto do erro, o que já foi removido até ali (nunca deixa a chamadora
+// sem saber o que já aconteceu) — mesmo padrão do Prune anterior.
+func pruneDetailed(now time.Time, undoneAfter, pendingAfter time.Duration, dryRun bool) (removedPending, removedUndone []string, err error) {
 	dir, err := Dir()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	manifests, err := List()
+	headers, _, err := List()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	removed := make([]string, 0)
-	for _, m := range manifests {
-		if m.UndoneAt == nil {
+	removedPending = make([]string, 0)
+	removedUndone = make([]string, 0)
+
+	for _, h := range headers {
+		if h.UndoneAt != nil {
+			if now.Sub(*h.UndoneAt) < undoneAfter {
+				continue
+			}
+			if !dryRun {
+				if err := os.Remove(manifestPath(dir, h.ID)); err != nil {
+					return removedPending, removedUndone, fmt.Errorf("erro ao remover manifesto expirado %q: %w", h.ID, err)
+				}
+			}
+			removedUndone = append(removedUndone, h.ID)
 			continue
 		}
-		if now.Sub(*m.UndoneAt) < retention {
+
+		if now.Sub(h.CreatedAt) < pendingAfter {
 			continue
 		}
-		if err := os.Remove(manifestPath(dir, m.ID)); err != nil {
-			return removed, fmt.Errorf("erro ao remover manifesto expirado %q: %w", m.ID, err)
+		if !dryRun {
+			if err := os.Remove(manifestPath(dir, h.ID)); err != nil {
+				return removedPending, removedUndone, fmt.Errorf("erro ao remover manifesto pendente expirado %q: %w", h.ID, err)
+			}
 		}
-		removed = append(removed, m.ID)
+		removedPending = append(removedPending, h.ID)
 	}
 
-	return removed, nil
+	return removedPending, removedUndone, nil
+}
+
+// Prune remove do disco os manifestos expirados, contado a partir de now:
+// já desfeitos (UndoneAt != nil) há mais de undoneAfter, e PENDENTES
+// (UndoneAt == nil, nunca desfeitos) há mais de pendingAfter desde
+// CreatedAt — ver PruneUndoneAfter e PrunePendingAfter. Devolve os IDs
+// efetivamente removidos, nas duas categorias combinadas (nunca nil; slice
+// vazio quando nada foi removido). Nenhum manifesto pendente MAIS NOVO que
+// pendingAfter é tocado, sob nenhuma condição — é exatamente ele que
+// permite desfazer aquela operação mais tarde.
+func Prune(now time.Time, undoneAfter, pendingAfter time.Duration) ([]string, error) {
+	pending, undone, err := pruneDetailed(now, undoneAfter, pendingAfter, false)
+	removed := make([]string, 0, len(pending)+len(undone))
+	removed = append(removed, pending...)
+	removed = append(removed, undone...)
+	return removed, err
+}
+
+// PrunePlan calcula exatamente o que Prune(now, undoneAfter, pendingAfter)
+// removeria, SEM TOCAR em nada no disco — o mesmo espírito de
+// Undo(m, dryRun=true, force): existe para "undo --prune" poder mostrar e
+// pedir confirmação sobre uma poda manual antes de apagar qualquer
+// manifesto de verdade. Devolve os IDs pendentes e já desfeitos
+// separadamente (ao contrário de Prune) porque só a perda de um pendente
+// precisa ser destacada na confirmação — um já desfeito já cumpriu sua
+// função.
+func PrunePlan(now time.Time, undoneAfter, pendingAfter time.Duration) (removedPending, removedUndone []string, err error) {
+	return pruneDetailed(now, undoneAfter, pendingAfter, true)
 }
 
 // MarkUndone carrega o manifesto de ID informado, grava UndoneAt = when e
