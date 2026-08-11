@@ -34,6 +34,8 @@ file-manager
 
 Cada ferramenta também funciona com flags de linha de comando. Use `file-manager <ferramenta> --help` para ver as opções de uma ferramenta específica.
 
+Para ver a versão instalada: `file-manager --version` (ou o atalho `-v`) ou `file-manager version` — as duas formas imprimem exatamente o mesmo texto.
+
 ## Ferramentas
 
 ### merge-pdf
