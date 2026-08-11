@@ -368,6 +368,23 @@ Todos via `make`:
 
 **CGO:** Todas as compilações usam `CGO_ENABLED=0` (Go puro, sem C).
 
+## Processo de Release
+
+Push de uma tag `v*` dispara `.github/workflows/release.yml`: o workflow roda `go test ./...` como gate, compila os binários de Linux e Windows com `CGO_ENABLED=0` e publica o release com os dois artefatos anexados.
+
+**Lançar uma versão nova:**
+```bash
+git tag -a vX.Y.Z -m "..."
+git push origin vX.Y.Z
+```
+Nada mais é necessário — o workflow cuida de teste, build e publicação.
+
+A versão reportada por `file-manager version` vem da tag, injetada via `-ldflags` (o mesmo mecanismo de `main.version` descrito acima) — por isso a tag é a fonte da verdade da versão, não o código.
+
+O job precisa de `permissions: contents: write` no workflow; sem isso a publicação do release falha com 403.
+
+As notas geradas automaticamente (`generate_release_notes: true`) são só o changelog de commits desde a tag anterior. Para notas descritivas em português voltadas ao usuário final, editar depois com `gh release edit <tag> --notes-file <arquivo>`.
+
 ## Exportação de Documentação
 
 A ferramenta consegue exportar sua própria documentação para uso em chatbots:
