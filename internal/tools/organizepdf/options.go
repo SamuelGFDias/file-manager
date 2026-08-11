@@ -72,6 +72,24 @@ type Options struct {
 	// ReportFormat é o formato do relatório: "csv" (default) ou "json". Só
 	// tem efeito quando Report não é vazio.
 	ReportFormat string `yaml:"report_format"`
+	// CSV é o caminho de uma planilha que já define a hierarquia de pastas
+	// de destino: o PDF fornece só a chave (extraída via CSVKeyRegex), e a
+	// planilha resolve a chave para o caminho. Vazio (default): a
+	// hierarquia continua vindo de Levels, como antes. Incompatível com
+	// Levels não vazio — ver ValidateCSVOptions.
+	CSV string `yaml:"csv"`
+	// CSVKeyRegex é a regex aplicada ao texto do PDF para extrair a chave
+	// usada para procurar a linha correspondente em CSV. Obrigatório
+	// quando CSV não é vazio.
+	CSVKeyRegex string `yaml:"csv_key_regex"`
+	// CSVKeyColumn é o nome da coluna da planilha (CSV) que contém a
+	// chave; vazio usa a primeira coluna do cabeçalho.
+	CSVKeyColumn string `yaml:"csv_key_column"`
+	// CSVLevels são os nomes das colunas da planilha (CSV) que formam a
+	// hierarquia de pastas, na ordem em que devem aparecer no caminho de
+	// destino; vazio usa todas as colunas exceto a chave, na ordem em que
+	// aparecem no arquivo.
+	CSVLevels []string `yaml:"csv_levels"`
 }
 
 // defaultOptions devolve as Options padrão de organize-pdf: sem níveis
@@ -148,6 +166,42 @@ func ParseLevelFlags(raw []string) ([]LevelSpec, error) {
 	}
 
 	return specs, nil
+}
+
+// ValidateCSVOptions valida a combinação das flags de planilha (--csv,
+// --csv-key-regex, --csv-key-column, --csv-levels) com --level, ANTES de
+// qualquer processamento de arquivo — função pura, sem I/O, para ser
+// testável isoladamente. hasLevels reflete se algum nível de pasta baseado
+// em conteúdo foi configurado (via --level ou via um perfil salvo), depois
+// de resolvido: um erro de configuração cruzada só vale a pena descobrir
+// antes de mover ou copiar um lote inteiro, nunca depois.
+//
+// csvPath vazio é o modo padrão (hierarquia vem do conteúdo do PDF, como
+// antes de --csv existir): nesse caso, é erro informar qualquer uma das
+// outras três flags de planilha, já que elas não têm efeito nenhum sem
+// --csv. csvPath não vazio exige --csv-key-regex (sem ele não há como
+// extrair a chave do PDF) e não pode conviver com hasLevels (a hierarquia
+// vem de um ou de outro, nunca dos dois).
+func ValidateCSVOptions(csvPath, csvKeyRegex, csvKeyColumn string, csvLevels []string, hasLevels bool) error {
+	csvPath = strings.TrimSpace(csvPath)
+	csvKeyRegex = strings.TrimSpace(csvKeyRegex)
+	csvKeyColumn = strings.TrimSpace(csvKeyColumn)
+
+	if csvPath == "" {
+		if csvKeyRegex != "" || csvKeyColumn != "" || len(csvLevels) > 0 {
+			return fmt.Errorf("--csv-key-regex, --csv-key-column e --csv-levels só fazem sentido junto com --csv")
+		}
+		return nil
+	}
+
+	if hasLevels {
+		return fmt.Errorf("--csv e --level são incompatíveis: a hierarquia de pastas vem de um ou de outro, nunca dos dois")
+	}
+	if csvKeyRegex == "" {
+		return fmt.Errorf("--csv exige --csv-key-regex: informe a regex que extrai a chave de dentro do PDF")
+	}
+
+	return nil
 }
 
 // BuildLevels compila os LevelSpec em []pdfutil.Level, na mesma ordem. É

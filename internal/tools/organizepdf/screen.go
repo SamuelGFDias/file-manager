@@ -34,9 +34,12 @@ const (
 
 // totalConfigSteps é a quantidade de etapas principais exibidas via
 // ui.Step() durante o fluxo interativo de organize-pdf: pasta de origem,
-// pasta de destino, modo de OCR, calibração dos níveis, nome do arquivo,
-// copiar/mover, relatório da execução e teste de calibragem. Puramente de
-// apresentação — não afeta a lógica de configuração nem de processamento.
+// pasta de destino, modo de OCR, hierarquia de pastas (etapa 4 — pelo
+// conteúdo do PDF, calibrando níveis, OU por uma planilha CSV; as duas
+// variantes cabem na mesma etapa numerada, ver configureLevels), nome do
+// arquivo, copiar/mover, relatório da execução e teste de calibragem.
+// Puramente de apresentação — não afeta a lógica de configuração nem de
+// processamento.
 const totalConfigSteps = 8
 
 // screen é a tela interativa da ferramenta organize-pdf.
@@ -372,14 +375,54 @@ func sampleOutsideInput(samplePath, inputDir string) (bool, error) {
 	return sampleDir != inputAbs, nil
 }
 
-// configureLevels laça perguntando se o usuário quer adicionar mais um
-// nível de pasta, calibrando cada um por exemplo com calibrate.Calibrate.
-// Responder "não" já na primeira pergunta é um caminho válido e esperado:
-// é o modo "somente renomear", em que os arquivos vão direto para a pasta
-// de destino, sem subpastas.
-func (t *Tool) configureLevels(sampleText string) error {
-	ui.Step(4, totalConfigSteps, "Calibração dos níveis")
+// csvHierarchyOption e contentHierarchyOption são as duas respostas
+// possíveis à pergunta "Como definir as pastas de destino?" (ver
+// configureLevels). Nomeadas como constantes porque comparadas em mais de
+// um ponto (a resposta em si, e a opção default ao recalibrar).
+const (
+	contentHierarchyOption = "Pelo conteúdo de cada PDF (calibrar regras)"
+	csvHierarchyOption     = "Por uma planilha CSV"
+)
 
+// configureLevels pergunta, primeiro, COMO a hierarquia de pastas de
+// destino vai ser definida: pelo conteúdo de cada PDF (o fluxo original,
+// calibrando um nível por vez — ver configureLevelsFromContent) ou por uma
+// planilha que já diz onde cada documento deve ser arquivado, com o PDF
+// fornecendo só a chave (ver configureCSVHierarchy). As duas opções
+// resultam num destino mutuamente exclusivo: escolher uma limpa o que a
+// outra teria configurado (t.opts.Levels vs. t.opts.CSV/CSVKeyRegex/...) —
+// necessário porque Edit() reaproveita este mesmo fluxo para reeditar um
+// perfil salvo, que pode ter sido configurado no outro modo da vez
+// anterior.
+func (t *Tool) configureLevels(sampleText string) error {
+	ui.Step(4, totalConfigSteps, "Hierarquia de pastas")
+
+	choice := ""
+	if err := survey.AskOne(&survey.Select{
+		Message: "Como definir as pastas de destino?",
+		Options: []string{contentHierarchyOption, csvHierarchyOption},
+	}, &choice); err != nil {
+		return err
+	}
+
+	if choice == csvHierarchyOption {
+		t.opts.Levels = nil
+		return t.configureCSVHierarchy(sampleText)
+	}
+
+	t.opts.CSV = ""
+	t.opts.CSVKeyRegex = ""
+	t.opts.CSVKeyColumn = ""
+	t.opts.CSVLevels = nil
+	return t.configureLevelsFromContent(sampleText)
+}
+
+// configureLevelsFromContent laça perguntando se o usuário quer adicionar
+// mais um nível de pasta, calibrando cada um por exemplo com
+// calibrate.Calibrate. Responder "não" já na primeira pergunta é um
+// caminho válido e esperado: é o modo "somente renomear", em que os
+// arquivos vão direto para a pasta de destino, sem subpastas.
+func (t *Tool) configureLevelsFromContent(sampleText string) error {
 	t.opts.Levels = nil
 
 	for {
@@ -417,6 +460,192 @@ func (t *Tool) configureLevels(sampleText string) error {
 
 		t.opts.Levels = append(t.opts.Levels, LevelSpec{Label: label, Regex: pattern})
 	}
+}
+
+// maxCSVFileAttempts limita quantas vezes o usuário pode escolher de novo a
+// planilha (quando a escolhida não pôde ser lida — coluna informada errada
+// numa tentativa anterior, arquivo corrompido etc.), para proteger contra
+// laço infinito, no mesmo espírito de maxSourceDirAttempts.
+const maxCSVFileAttempts = 5
+
+// configureCSVHierarchy conduz o fluxo interativo do modo --csv: escolher a
+// planilha, mostrar um resumo (linhas, coluna-chave, colunas de hierarquia
+// e um exemplo de caminho já normalizado) antes de qualquer processamento,
+// oferecer a chance de trocar a coluna-chave ou escolher as colunas de
+// hierarquia, e por fim calibrar a regex que extrai a chave do PDF —
+// reaproveitando internal/ui/calibrate, o mesmo componente usado para
+// calibrar níveis e nome de arquivo no modo por conteúdo.
+func (t *Tool) configureCSVHierarchy(sampleText string) error {
+	csvPath, err := filepicker.PickFileWithPrompt(
+		t.opts.InputDir,
+		"Selecione a PLANILHA que define a hierarquia de pastas de destino",
+		[]string{".csv"},
+	)
+	if err != nil {
+		return err
+	}
+
+	keyColumn := ""
+	var levelColumns []string
+	var loaded pdfutil.CSVMap
+
+	for attempt := 0; attempt < maxCSVFileAttempts; attempt++ {
+		m, loadErr := pdfutil.LoadCSVMap(csvPath, keyColumn, levelColumns)
+		if loadErr == nil {
+			loaded = m
+			break
+		}
+
+		ui.Errorf("%v", loadErr)
+
+		retry := true
+		if err := survey.AskOne(&survey.Confirm{
+			Message: "Escolher outra planilha?",
+			Default: true,
+		}, &retry); err != nil {
+			return err
+		}
+		if !retry {
+			return filepicker.ErrCancelled
+		}
+
+		newPath, err := filepicker.PickFileWithPrompt(
+			t.opts.InputDir,
+			"Selecione a PLANILHA que define a hierarquia de pastas de destino",
+			[]string{".csv"},
+		)
+		if err != nil {
+			return err
+		}
+		csvPath = newPath
+		keyColumn = ""
+		levelColumns = nil
+
+		if attempt == maxCSVFileAttempts-1 {
+			return fmt.Errorf("limite de %d tentativas de escolher uma planilha válida atingido", maxCSVFileAttempts)
+		}
+	}
+
+	t.showCSVSummary(loaded)
+
+	adjust := false
+	if err := survey.AskOne(&survey.Confirm{
+		Message: "Usar outra coluna como chave, ou escolher/reordenar as colunas de hierarquia?",
+		Default: false,
+	}, &adjust); err != nil {
+		return err
+	}
+
+	if adjust {
+		newKeyColumn, newLevelColumns, err := t.askCSVColumns(csvPath, loaded)
+		if err != nil {
+			return err
+		}
+		keyColumn = newKeyColumn
+		levelColumns = newLevelColumns
+
+		reloaded, err := pdfutil.LoadCSVMap(csvPath, keyColumn, levelColumns)
+		if err != nil {
+			return err
+		}
+		loaded = reloaded
+		t.showCSVSummary(loaded)
+	}
+
+	pattern, err := calibrate.Calibrate(calibrate.Request{
+		Label:      "chave do documento",
+		SampleText: sampleText,
+	})
+	if err != nil {
+		return err
+	}
+
+	t.opts.CSV = csvPath
+	t.opts.CSVKeyRegex = pattern
+	t.opts.CSVKeyColumn = keyColumn
+	t.opts.CSVLevels = levelColumns
+
+	return nil
+}
+
+// askCSVColumns lê o cabeçalho completo da planilha (todas as colunas,
+// independente do que já estava selecionado) e deixa o usuário escolher
+// qual vira a coluna-chave e quais (e em que ordem de exibição) formam a
+// hierarquia de pastas.
+func (t *Tool) askCSVColumns(csvPath string, current pdfutil.CSVMap) (keyColumn string, levelColumns []string, err error) {
+	header, err := pdfutil.ReadCSVHeader(csvPath)
+	if err != nil {
+		return "", nil, err
+	}
+
+	keyColumn = current.KeyColumn
+	if err := survey.AskOne(&survey.Select{
+		Message: "Qual coluna é a chave (o valor que será procurado no PDF)?",
+		Options: header,
+		Default: current.KeyColumn,
+	}, &keyColumn); err != nil {
+		return "", nil, err
+	}
+
+	levelOptions := make([]string, 0, len(header)-1)
+	for _, h := range header {
+		if h == keyColumn {
+			continue
+		}
+		levelOptions = append(levelOptions, h)
+	}
+
+	levelColumns = []string{}
+	if err := survey.AskOne(&survey.MultiSelect{
+		Message: "Quais colunas formam a hierarquia de pastas? (na ordem em que aparecem abaixo)",
+		Options: levelOptions,
+		Default: levelOptions,
+	}, &levelColumns); err != nil {
+		return "", nil, err
+	}
+
+	return keyColumn, levelColumns, nil
+}
+
+// showCSVSummary mostra, antes de calibrar a regex da chave (e antes de
+// qualquer processamento de arquivo), quantas linhas a planilha tem, qual
+// coluna foi tomada como chave, quais colunas viraram a hierarquia e um
+// exemplo do caminho de destino que seria gerado a partir da primeira linha
+// — ver o caminho pronto antes de qualquer processamento evita a
+// descoberta tardia de que a coluna errada foi usada.
+func (t *Tool) showCSVSummary(m pdfutil.CSVMap) {
+	ui.Divider()
+	ui.Infof("%s: %s na planilha.", ui.Bold("Resumo"), ui.Count(len(m.Rows), "linha", "linhas"))
+	ui.Infof("Coluna-chave: %s", ui.Highlight(m.KeyColumn))
+	ui.Infof("Colunas de hierarquia: %s", ui.Highlight(strings.Join(m.Levels, " / ")))
+
+	if example, ok := exampleCSVPath(m); ok {
+		ui.Infof("Exemplo de caminho gerado: %s", ui.PathText(example))
+	}
+	for _, w := range m.Warnings {
+		ui.Warnf("%s", w)
+	}
+	ui.Divider()
+	ui.Blank()
+}
+
+// exampleCSVPath monta o caminho de destino (componentes de pasta já
+// normalizados + "chave.pdf") que a primeira linha lida da planilha geraria
+// — usa m.Order (não m.Rows, que é um map sem ordem garantida) para achar
+// de fato a primeira chave lida do arquivo. ok=false quando a planilha não
+// tem nenhuma linha de dados (cabeçalho sozinho).
+func exampleCSVPath(m pdfutil.CSVMap) (string, bool) {
+	if len(m.Order) == 0 {
+		return "", false
+	}
+	key := m.Order[0]
+	components, ok := m.Lookup(key)
+	if !ok {
+		return "", false
+	}
+	parts := append([]string{}, components...)
+	parts = append(parts, key+".pdf")
+	return filepath.Join(parts...), true
 }
 
 // configureFilenameRegex pergunta se os arquivos devem ser renomeados a
@@ -663,14 +892,25 @@ func askTestSampleSize() (int, error) {
 	return n, nil
 }
 
-// recalibrateLevel mostra a lista de níveis já configurados, mais a opção
-// de recalibrar o nome do arquivo, deixa o usuário escolher qual quer
-// refazer e chama calibrate.Calibrate com Initial preenchido com a regex
-// atual daquele nível, sem mexer nos demais.
+// csvKeyOption é a opção de recalibrar a regex da chave do documento (modo
+// --csv), oferecida por recalibrateLevel só quando t.opts.CSV não é vazio —
+// nesse modo não há níveis calibrados por conteúdo (t.opts.Levels fica
+// vazio, ver configureLevels), então a lista normal de níveis não teria o
+// que oferecer sem essa opção extra.
+const csvKeyOption = "Chave do documento (planilha)"
+
+// recalibrateLevel mostra a lista de níveis já configurados (ou, em modo
+// --csv, a opção de recalibrar a chave da planilha), mais a opção de
+// recalibrar o nome do arquivo, deixa o usuário escolher qual quer refazer
+// e chama calibrate.Calibrate com Initial preenchido com a regex atual
+// daquele item, sem mexer nos demais.
 func (t *Tool) recalibrateLevel(sampleText string) error {
 	const filenameOption = "Nome do arquivo"
 
-	options := make([]string, 0, len(t.opts.Levels)+1)
+	options := make([]string, 0, len(t.opts.Levels)+2)
+	if t.opts.CSV != "" {
+		options = append(options, csvKeyOption)
+	}
 	for _, level := range t.opts.Levels {
 		options = append(options, level.Label)
 	}
@@ -682,6 +922,19 @@ func (t *Tool) recalibrateLevel(sampleText string) error {
 		Options: options,
 	}, &chosen); err != nil {
 		return err
+	}
+
+	if chosen == csvKeyOption {
+		pattern, err := calibrate.Calibrate(calibrate.Request{
+			Label:      "chave do documento",
+			SampleText: sampleText,
+			Initial:    t.opts.CSVKeyRegex,
+		})
+		if err != nil {
+			return err
+		}
+		t.opts.CSVKeyRegex = pattern
+		return nil
 	}
 
 	if chosen == filenameOption {

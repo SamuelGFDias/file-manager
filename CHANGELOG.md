@@ -18,6 +18,18 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.7.0] - 2026-08-11
+
+### Adicionado
+
+- **Organizar PDFs a partir de uma planilha (`organize-pdf --csv`).** Até aqui a hierarquia de pastas saía do conteúdo de cada PDF, por regex (`--level`). O caso inverso é comum: o usuário já tem uma planilha dizendo onde cada documento deve ser arquivado, e o PDF fornece só a **chave** para procurar nela. `--csv <planilha>` inverte a fonte da hierarquia: a primeira coluna da planilha (ou `--csv-key-column`) casa com a chave extraída do PDF via `--csv-key-regex` (obrigatório junto com `--csv`), e as demais colunas (ou `--csv-levels`, na ordem informada) formam os níveis de pasta. O nome do arquivo de destino é a própria chave por padrão; `--filename-regex`, quando informado, continua valendo e sobrepõe. `--csv` é incompatível com `--level` — a hierarquia vem de um ou de outro, nunca dos dois.
+- **Os nomes de pasta gerados a partir da planilha são normalizados: acentos são removidos e espaços viram `_`** (`pdfutil.NormalizeComponent`, novo `internal/pdfutil/csvmap.go`) — "São Gonçalo" vira `Sao_Goncalo`, "Niterói" vira `Niteroi`. Decisão intencional: nome de pasta acentuado dá problema em rede compartilhada e em ambiente misto Windows/Linux.
+- **A leitura da planilha (`pdfutil.LoadCSVMap`) aceita separador vírgula ou ponto e vírgula, detectado automaticamente pela primeira linha** — o Excel em português salva CSV com `;` por padrão, e é essa a planilha que a maioria dos usuários vai ter na mão. O BOM UTF-8 que o Excel (e o próprio `--report` desde a v0.6.0) costuma gravar no início do arquivo é descartado automaticamente.
+- **Chaves são comparadas como texto, com espaços das pontas removidos — nunca convertidas para número:** `001` e `1` são chaves diferentes, porque zeros à esquerda são significativos em número de nota. Uma **chave duplicada na planilha é erro**, citando a chave repetida: duas linhas apontando para pastas diferentes sob a mesma chave precisam ser corrigidas por quem preencheu a planilha, não resolvidas por sorteio. Uma **célula de nível vazia, ao contrário, não é erro:** o componente de pasta correspondente é só omitido, com um aviso no resultado citando a chave e a coluna.
+- **Uma chave que o regex encontra no PDF mas que não existe na planilha não interrompe o lote** — é, na prática, o caso mais comum: o arquivo vai para `--unclassified-dir` com o motivo citando a chave encontrada (ex.: `chave "999" não está na planilha`), para conferir na planilha depois.
+- No fluxo interativo, a etapa de hierarquia de pastas agora pergunta primeiro "Pelo conteúdo de cada PDF" ou "Por uma planilha CSV"; o caminho CSV mostra um resumo (linhas, coluna-chave, colunas de hierarquia e um exemplo de caminho gerado) antes de qualquer processamento, permite trocar a coluna-chave ou reordenar as colunas de hierarquia, e calibra a regex da chave reaproveitando o mesmo componente de calibração por exemplo (`internal/ui/calibrate`) usado pelo modo por conteúdo.
+- `--csv`, `--csv-key-regex`, `--csv-key-column` e `--csv-levels` são persistidos no perfil salvo, como as demais opções de `organize-pdf`.
+
 ## [0.6.0] - 2026-08-11
 
 ### Adicionado

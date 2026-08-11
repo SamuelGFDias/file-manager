@@ -166,10 +166,14 @@ func TestExpectedFlagsExist(t *testing.T) {
 		{"ocr-lang", ""},
 		{"report", ""},
 		{"report-format", ""},
+		{"csv", ""},
+		{"csv-key-regex", ""},
+		{"csv-key-column", ""},
+		{"csv-levels", ""},
 	}
 
-	if len(cases) != 13 {
-		t.Fatalf("teste declara %d flags, esperava 13", len(cases))
+	if len(cases) != 17 {
+		t.Fatalf("teste declara %d flags, esperava 17", len(cases))
 	}
 
 	for _, c := range cases {
@@ -707,5 +711,279 @@ func TestRunReportWriteFailureDoesNotFailOperation(t *testing.T) {
 	}
 	if len(unclassifiedEntries) != 1 {
 		t.Fatalf("esperava 1 arquivo em sem-classificacao, obteve %d — a organização deveria ter acontecido normalmente apesar da falha do relatório", len(unclassifiedEntries))
+	}
+}
+
+// --- Validação de --csv e flags relacionadas --------------------------------
+
+func TestValidateCSVOptionsCSVWithLevelIsError(t *testing.T) {
+	err := ValidateCSVOptions("./planilha.csv", `NOTA:\s*(\d+)`, "", nil, true)
+	if err == nil {
+		t.Fatal("--csv junto com --level deveria devolver erro")
+	}
+	if !strings.Contains(err.Error(), "--csv") || !strings.Contains(err.Error(), "--level") {
+		t.Errorf("erro %q deveria mencionar --csv e --level", err.Error())
+	}
+}
+
+func TestValidateCSVOptionsCSVWithoutKeyRegexIsError(t *testing.T) {
+	err := ValidateCSVOptions("./planilha.csv", "", "", nil, false)
+	if err == nil {
+		t.Fatal("--csv sem --csv-key-regex deveria devolver erro")
+	}
+	if !strings.Contains(err.Error(), "--csv-key-regex") {
+		t.Errorf("erro %q deveria mencionar --csv-key-regex", err.Error())
+	}
+}
+
+func TestValidateCSVOptionsExtraFlagsWithoutCSVAreError(t *testing.T) {
+	cases := []struct {
+		name         string
+		keyRegex     string
+		keyColumn    string
+		levelColumns []string
+	}{
+		{"csv-key-regex sozinho", `NOTA:\s*(\d+)`, "", nil},
+		{"csv-key-column sozinho", "", "NOTA", nil},
+		{"csv-levels sozinho", "", "", []string{"CIDADE"}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := ValidateCSVOptions("", c.keyRegex, c.keyColumn, c.levelColumns, false)
+			if err == nil {
+				t.Fatalf("%s sem --csv deveria devolver erro", c.name)
+			}
+			if !strings.Contains(err.Error(), "--csv") {
+				t.Errorf("erro %q deveria mencionar --csv", err.Error())
+			}
+		})
+	}
+}
+
+func TestValidateCSVOptionsValidCombinationsOK(t *testing.T) {
+	if err := ValidateCSVOptions("", "", "", nil, false); err != nil {
+		t.Errorf("sem nenhuma flag de csv nem --level não deveria dar erro: %v", err)
+	}
+	if err := ValidateCSVOptions("", "", "", nil, true); err != nil {
+		t.Errorf("só --level (sem --csv) não deveria dar erro: %v", err)
+	}
+	if err := ValidateCSVOptions("./planilha.csv", `NOTA:\s*(\d+)`, "", nil, false); err != nil {
+		t.Errorf("--csv com --csv-key-regex, sem --level, não deveria dar erro: %v", err)
+	}
+	if err := ValidateCSVOptions("./planilha.csv", `NOTA:\s*(\d+)`, "NOTA", []string{"CIDADE", "BAIRRO"}, false); err != nil {
+		t.Errorf("--csv com todas as flags relacionadas preenchidas não deveria dar erro: %v", err)
+	}
+}
+
+// --- run() com --csv ---------------------------------------------------------
+
+func TestRunCSVWithLevelErrorsWithoutPanic(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(inputDir, "doc.pdf"), []byte("conteudo qualquer"), 0o644); err != nil {
+		t.Fatalf("criar pdf de teste: %v", err)
+	}
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:    inputDir,
+		OutputDir:   outputDir,
+		OCR:         "never",
+		CSV:         "./planilha.csv",
+		CSVKeyRegex: `NOTA:\s*(\d+)`,
+		Levels:      []LevelSpec{{Label: "fornecedor", Regex: `FORNECEDOR:\s*(\w+)`}},
+	}
+
+	if _, err := tl.run(); err == nil {
+		t.Fatal("run() com --csv e --level deveria devolver erro")
+	}
+
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		t.Fatalf("ler outputDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("outputDir tem %d entradas; a validação de --csv+--level deveria falhar ANTES de processar qualquer arquivo", len(entries))
+	}
+}
+
+func TestRunCSVWithoutKeyRegexErrorsWithoutPanic(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:  inputDir,
+		OutputDir: outputDir,
+		OCR:       "never",
+		CSV:       "./planilha.csv",
+	}
+
+	if _, err := tl.run(); err == nil {
+		t.Fatal("run() com --csv sem --csv-key-regex deveria devolver erro")
+	}
+}
+
+func TestRunCSVFlagsWithoutCSVErrorsWithoutPanic(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:     inputDir,
+		OutputDir:    outputDir,
+		OCR:          "never",
+		CSVKeyColumn: "NOTA",
+	}
+
+	if _, err := tl.run(); err == nil {
+		t.Fatal("run() com --csv-key-column sem --csv deveria devolver erro")
+	}
+}
+
+func TestRunCSVNonexistentFileErrorsWithPathInMessage(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	csvPath := filepath.Join(t.TempDir(), "nao-existe.csv")
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:    inputDir,
+		OutputDir:   outputDir,
+		OCR:         "never",
+		CSV:         csvPath,
+		CSVKeyRegex: `NOTA:\s*(\d+)`,
+	}
+
+	_, err := tl.run()
+	if err == nil {
+		t.Fatal("run() com planilha inexistente deveria devolver erro")
+	}
+	if !strings.Contains(err.Error(), csvPath) {
+		t.Errorf("erro %q deveria citar o caminho da planilha (%q)", err.Error(), csvPath)
+	}
+}
+
+func TestRunCSVInvalidKeyRegexErrorsWithoutPanic(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "planilha.csv")
+	if err := os.WriteFile(csvPath, []byte("NOTA,CIDADE\n001,Acme\n"), 0o644); err != nil {
+		t.Fatalf("criar planilha de teste: %v", err)
+	}
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:    t.TempDir(),
+		OutputDir:   t.TempDir(),
+		OCR:         "never",
+		CSV:         csvPath,
+		CSVKeyRegex: "[",
+	}
+
+	if _, err := tl.run(); err == nil {
+		t.Fatal("run() com --csv-key-regex inválida deveria devolver erro")
+	}
+}
+
+// TestRunCSVWiresLoadedMapIntoOrganize confere que run() carrega a planilha
+// e passa CSV/CSVKeyRegex adiante para pdfutil.Organize: o "PDF" de teste
+// não é um PDF de verdade (a extração de texto falha, então ele cai em
+// sem-classificacao, motivo "texto" — não chega a testar a resolução via
+// CSVMap.Lookup, já coberta em internal/pdfutil), mas confirma que o
+// caminho todo (carregar a planilha, compilar a regex, montar
+// OrganizeOptions, chamar Organize, montar o relatório de Details) roda sem
+// erro e sem pânico com --csv de ponta a ponta.
+func TestRunCSVWiresLoadedMapIntoOrganize(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(inputDir, "doc.pdf"), []byte("conteudo qualquer, nao e pdf de verdade"), 0o644); err != nil {
+		t.Fatalf("criar pdf de teste: %v", err)
+	}
+
+	csvPath := filepath.Join(t.TempDir(), "planilha.csv")
+	if err := os.WriteFile(csvPath, []byte("NOTA,CIDADE,BAIRRO\n001,Sao Goncalo,Laranjal\n"), 0o644); err != nil {
+		t.Fatalf("criar planilha de teste: %v", err)
+	}
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:        inputDir,
+		OutputDir:       outputDir,
+		UnclassifiedDir: "sem-classificacao",
+		OCR:             "never",
+		CSV:             csvPath,
+		CSVKeyRegex:     `NOTA:\s*(\d+)`,
+	}
+
+	result, err := tl.run()
+	if err != nil {
+		t.Fatalf("run() com --csv válido não deveria devolver erro: %v", err)
+	}
+
+	unclassifiedEntries, err := os.ReadDir(filepath.Join(outputDir, "sem-classificacao"))
+	if err != nil {
+		t.Fatalf("ler outputDir/sem-classificacao: %v", err)
+	}
+	if len(unclassifiedEntries) != 1 {
+		t.Fatalf("esperava 1 arquivo em sem-classificacao (texto não extraível), obteve %d", len(unclassifiedEntries))
+	}
+
+	if !strings.Contains(result.Summary, "0 de 1") {
+		t.Errorf("Summary = %q, esperava indicar 0 de 1 organizados", result.Summary)
+	}
+}
+
+func TestRunCSVEmptyLevelCellWarningReachesDetails(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(inputDir, "doc.pdf"), []byte("conteudo qualquer"), 0o644); err != nil {
+		t.Fatalf("criar pdf de teste: %v", err)
+	}
+
+	// Célula de nível ("CIDADE") vazia na única linha da planilha: deve
+	// virar um aviso, não um erro, e chegar até Result.Details.
+	csvPath := filepath.Join(t.TempDir(), "planilha.csv")
+	if err := os.WriteFile(csvPath, []byte("NOTA,CIDADE\n001,\n"), 0o644); err != nil {
+		t.Fatalf("criar planilha de teste: %v", err)
+	}
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:        inputDir,
+		OutputDir:       outputDir,
+		UnclassifiedDir: "sem-classificacao",
+		OCR:             "never",
+		CSV:             csvPath,
+		CSVKeyRegex:     `NOTA:\s*(\d+)`,
+	}
+
+	result, err := tl.run()
+	if err != nil {
+		t.Fatalf("run() não deveria devolver erro: %v", err)
+	}
+
+	found := false
+	for _, d := range result.Details {
+		if strings.Contains(d, "001") && strings.Contains(d, "CIDADE") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Result.Details deveria conter o aviso de célula vazia (chave 001, coluna CIDADE): %+v", result.Details)
 	}
 }
