@@ -613,7 +613,7 @@ Os três já foram corrigidos no código de produção — mas nenhum unitário 
 
 Push de uma tag `v*` dispara `.github/workflows/release.yml`: o workflow extrai as notas de release em português para a tag, roda `go test ./...` como gate, compila os binários de Linux e Windows com `CGO_ENABLED=0` e publica o release com os dois artefatos anexados.
 
-**Lançar uma versão nova**, depois que a entrada da versão em `CHANGELOG.md` (e, se for o caso, o arquivo em `.github/release-notes/`) já estiverem mesclados em `main`:
+**Lançar uma versão nova**, depois que a entrada da versão em `CHANGELOG.md` **e** o arquivo `.github/release-notes/vX.Y.Z.md` já estiverem mesclados em `main`:
 ```bash
 git tag -a vX.Y.Z -m "..."
 git push origin vX.Y.Z
@@ -630,11 +630,17 @@ Até a v0.11.0 (14 releases publicados), `generate_release_notes: true` produzia
 
 O problema de fundo não era a espera — era que o texto voltado ao usuário final era produzido **depois** do release estar publicado, fora de qualquer PR, sem revisão nenhuma.
 
-A partir desta mudança: `.github/extract-release-notes.sh <tag> <changelog> <rodapé>` monta as notas a partir de `.github/release-notes/<tag>.md` (se existir — para uma versão que merece texto mais longo que uma entrada de changelog) ou, na falta dele, da seção `## [X.Y.Z]` do `CHANGELOG.md`; em qualquer caso anexa o rodapé fixo `.github/release-footer.md` (instruções de download, `chmod +x`, aviso do SmartScreen do Windows, lembrete de `file-manager update`). O workflow roda esse script como primeiro passo do job — **antes** de compilar — e falha o job se não houver notas para a tag: publicar sem notas é pior que não publicar, e falhar antes de gastar minutos compilando é o comportamento certo.
+A partir desta mudança: `.github/extract-release-notes.sh <tag> <changelog> <rodapé>` monta as notas a partir de `.github/release-notes/<tag>.md` e anexa o rodapé fixo `.github/release-footer.md` (instruções de download, `chmod +x`, aviso do SmartScreen do Windows, lembrete de `file-manager update`). O workflow roda esse script como primeiro passo do job — **antes** de compilar — e falha o job se o arquivo não existir para a tag: publicar sem notas é pior que não publicar, e falhar antes de gastar minutos compilando é o comportamento certo.
 
 O resultado vai para `softprops/action-gh-release` via `body_path`, com `generate_release_notes: true` mantido: pela documentação da action, quando `body`/`body_path` é fornecido junto com `generate_release_notes: true`, o texto fornecido é **pré-pendido** às notas geradas automaticamente pelo GitHub — não as substitui. É assim que a linha `**Full Changelog**` continua aparecendo no final de todo release, sem ninguém precisar preservá-la à mão.
 
-O efeito prático: quem escreve a feature agora escreve a nota de release também, dentro do PR — na entrada de `[Não publicado]` do `CHANGELOG.md` ou, quando o caso pedir mais contexto, em `.github/release-notes/<tag>.md` — e ela é revisada junto com o resto da mudança, antes do release existir. Ver `docs/CONTRIBUTING.md`, seção "Processo de Release", para o passo a passo.
+### Decisão: `CHANGELOG.md` e as notas de release não compartilham texto, e não há fallback entre os dois
+
+A primeira versão deste mecanismo usava a seção do `CHANGELOG.md` como fonte padrão, caindo em `.github/release-notes/<tag>.md` só "quando o changelog não bastasse". Testado na prática (`v0.9.0`), o resultado publicaria como nota de release um trecho como *"`internal/history.List` agora pula cada arquivo que falhar ao ler ou decodificar... passou a devolver `[]Header`... evita reter 60 mil entradas na memória"* — texto correto para quem mantém o código, incompreensível para quem baixa o `.exe` e dá duplo clique nele.
+
+`CHANGELOG.md` e `.github/release-notes/<tag>.md` respondem a perguntas diferentes: o primeiro é o registro técnico (nomes de função, tipos, decisões de implementação) para quem mantém o projeto; o segundo é "o que muda para mim", para quem só usa o programa. Um fallback do segundo para o primeiro parece rede de segurança, mas garante que, no dia em que alguém esquecer de escrever as notas ao usuário, o release saia com o texto técnico — sem ninguém perceber, porque tecnicamente "funcionou". Por isso `.github/release-notes/<tag>.md` é **obrigatório, sem fallback**: na ausência dele, `extract-release-notes.sh` falha citando o caminho exato que falta criar, em vez de degradar em silêncio para o texto errado.
+
+O efeito prático: quem escreve a feature escreve dois textos no mesmo PR — a entrada técnica em `CHANGELOG.md` (`[Não publicado]`) e as notas ao usuário em `.github/release-notes/<tag>.md` — revisados juntos, antes do release existir. Ver `docs/CONTRIBUTING.md`, seção "Processo de Release", para o passo a passo, e `.github/release-notes/README.md` para o que escrever em cada um (com exemplo lado a lado).
 
 ## Exportação de Documentação
 

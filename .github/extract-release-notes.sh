@@ -6,17 +6,24 @@
 # Uso:
 #   extract-release-notes.sh <tag> <caminho-do-changelog> <caminho-do-rodape>
 #
-# Fonte do texto, em ordem de prioridade:
-#   1. .github/release-notes/<tag>.md, se existir — texto próprio, mais
-#      livre que uma entrada de changelog (ver .github/release-notes/README.md).
-#   2. A seção correspondente do changelog: "## [X.Y.Z]", com ou sem
-#      data ao lado (ex.: "## [0.12.0]" ou "## [0.12.0] - 2026-08-11").
+# Fonte do texto: exclusivamente .github/release-notes/<tag>.md.
 #
-# Em qualquer um dos dois casos, o conteúdo do arquivo de rodapé é
-# anexado ao final. Se nenhuma das duas fontes tiver conteúdo para a
-# tag, o script falha (código de saída != 0) com uma mensagem em stderr
-# citando a tag — é melhor falhar aqui, antes de compilar e publicar,
-# do que publicar um release sem notas.
+# Esse arquivo é obrigatório para publicar — não há fallback para a
+# seção correspondente do CHANGELOG.md. Os dois documentos têm público
+# diferente e não podem ser confundidos: o CHANGELOG.md é o registro
+# técnico (nomes de função, tipos, decisões de implementação) para quem
+# mantém o projeto; .github/release-notes/<tag>.md é o texto para quem
+# só usa o programa. Se o fallback existisse, o dia em que alguém
+# esquecesse de escrever as notas ao usuário resultaria em publicar o
+# texto técnico do changelog como nota de release — sem ninguém notar,
+# porque "funcionou" tecnicamente. É melhor falhar aqui, antes de
+# compilar, e apontar exatamente o arquivo que falta criar.
+#
+# O caminho do changelog é recebido e validado (tem que existir) porque
+# é o argumento que o workflow já passa e mantém o contrato estável,
+# mas o conteúdo dele não é lido por este script.
+#
+# Depois do texto da tag, o conteúdo do arquivo de rodapé é anexado.
 set -euo pipefail
 
 usage() {
@@ -48,17 +55,11 @@ if [[ ! -f "$FOOTER_PATH" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RICH_NOTES_PATH="${SCRIPT_DIR}/release-notes/${TAG}.md"
-
-# Versão sem o prefixo "v" (ex.: v0.12.0 -> 0.12.0), usada para casar
-# com o cabeçalho "## [0.12.0]" do changelog. Como é comparada de forma
-# literal (com pontos escapados) contra a versão da tag, nunca casa por
-# acidente com "## [Não publicado]", que não tem formato de versão.
-VERSION="${TAG#v}"
+NOTES_PATH="${SCRIPT_DIR}/release-notes/${TAG}.md"
 
 # Remove linhas em branco do início e do fim de stdin, preservando as
-# do meio. Evita que a seção extraída comece/termine com espaço em
-# branco supérfluo antes de anexar o rodapé.
+# do meio. Evita que o texto comece/termine com espaço em branco
+# supérfluo antes de anexar o rodapé.
 trim_blank_lines() {
   awk '
     { lines[NR] = $0 }
@@ -72,52 +73,27 @@ trim_blank_lines() {
   '
 }
 
-# Imprime o conteúdo da seção "## [<versão>]" do changelog (sem incluir
-# o próprio cabeçalho nem a seção seguinte). Sai com código != 0, sem
-# imprimir nada, se a seção não existir.
-extract_from_changelog() {
-  awk -v ver="$VERSION" '
-    BEGIN {
-      gver = ver
-      gsub(/\./, "\\.", gver)
-      header_re = "^## \\[" gver "\\]([ \t]*-.*)?[ \t]*$"
-      in_section = 0
-      found = 0
-    }
-    {
-      if ($0 ~ header_re) {
-        in_section = 1
-        found = 1
-        next
-      }
-      if (in_section && $0 ~ /^## \[/) {
-        in_section = 0
-      }
-      if (in_section) {
-        print
-      }
-    }
-    END {
-      exit(found ? 0 : 1)
-    }
-  ' "$CHANGELOG_PATH"
-}
+if [[ ! -f "$NOTES_PATH" ]]; then
+  cat >&2 <<EOF
+erro: notas de release ausentes para a tag '$TAG'.
 
-BODY=""
+Esperado: '$NOTES_PATH'
 
-if [[ -f "$RICH_NOTES_PATH" ]]; then
-  BODY="$(trim_blank_lines < "$RICH_NOTES_PATH")"
-else
-  RAW=""
-  if ! RAW="$(extract_from_changelog)"; then
-    echo "erro: nenhuma seção '## [${VERSION}]' encontrada em '$CHANGELOG_PATH' para a tag '$TAG', e não existe '$RICH_NOTES_PATH'." >&2
-    exit 1
-  fi
-  BODY="$(printf '%s\n' "$RAW" | trim_blank_lines)"
+Esse arquivo é obrigatório e não tem substituto automático: a seção
+correspondente do CHANGELOG.md é o registro técnico do projeto (nomes de
+função, tipos, decisões de implementação) e não deve ser publicada como
+nota de release. Crie '$NOTES_PATH' com o texto em português voltado a
+quem usa o programa (o que mudou, por que importa, sem jargão de
+implementação) — ver .github/release-notes/README.md — e mescle o
+arquivo em main antes de publicar a tag.
+EOF
+  exit 1
 fi
 
+BODY="$(trim_blank_lines < "$NOTES_PATH")"
+
 if [[ -z "$BODY" ]]; then
-  echo "erro: a seção de notas encontrada para a tag '$TAG' está vazia." >&2
+  echo "erro: '$NOTES_PATH' existe mas está vazio." >&2
   exit 1
 fi
 
