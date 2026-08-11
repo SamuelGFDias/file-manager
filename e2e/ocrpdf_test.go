@@ -84,3 +84,75 @@ func TestOCRPdfDryRunClassifiesEligibleAndSkipped(t *testing.T) {
 		t.Fatalf("--dry-run criou arquivo(s) além dos dois originais: %d entradas em %s", len(entries), inputDir)
 	}
 }
+
+// TestOCRPdfPastaSemPDFAvisaAntesDeSufixoEIdioma mira o defeito relatado
+// (ver AGENTS.md, Decisão 19): o usuário escolheu "Escolher arquivos
+// específicos", navegou até uma pasta sem PDF nenhum e — antes desta
+// correção — nada impedia o avanço até seis perguntas depois (sufixo,
+// idioma, sobrescrita, retomada, simulação), quando o programa finalmente
+// falhava com "informe ao menos um arquivo ou pasta em --input". Este
+// teste prova que o aviso de pasta sem PDF aparece NA HORA, antes de
+// qualquer uma dessas perguntas — e que a lista (vazia) de seleção nunca
+// chega a ser mostrada.
+//
+// Ao contrário de TestOCRPdfDryRunClassifiesEligibleAndSkipped, este
+// cenário é sobre a TELA interativa (não sobre --dry-run via linha de
+// comando) e não precisa do Tesseract de verdade: a validação de entradas
+// acontece antes de qualquer checagem de motor de OCR (ver
+// internal/tools/ocrpdf/command.go, ocrizeRaw), então roda com o ambiente
+// isolado padrão (startBin), que deliberadamente tira o Tesseract do PATH.
+func TestOCRPdfPastaSemPDFAvisaAntesDeSufixoEIdioma(t *testing.T) {
+	emptyDir := t.TempDir() // deliberadamente sem nenhum PDF
+
+	sess := startBin(t, emptyDir)
+	defer sess.Close()
+
+	sess.Expect("Tornar PDF pesquisável", defaultTimeout)
+	sess.Send("Tornar PDF pesquisável")
+	sess.Enter()
+
+	sess.Expect("Como deseja adicionar entradas para processar?", defaultTimeout)
+	sess.Enter() // "Escolher arquivos específicos" é a opção padrão (primeiro item)
+
+	sess.Expect("Diretório atual: "+emptyDir, defaultTimeout)
+
+	// A pasta está vazia (sem subpastas nem PDFs): as opções são só
+	// ".. (voltar)", "[ Escolher arquivos desta pasta ]" e "[ Cancelar ]",
+	// nessa ordem (ver filepicker.PickFiles) — "[ Escolher arquivos desta
+	// pasta ]" é a segunda.
+	sess.Down()
+	sess.Enter()
+
+	sess.Expect("não tem nenhum arquivo com a extensão .pdf", defaultTimeout)
+
+	// A prova central do defeito corrigido: nenhuma pergunta seguinte
+	// (sufixo, idioma) pode ter aparecido, e a lista de seleção múltipla
+	// (que estaria vazia e não comunicaria nada) nunca deveria ter sido
+	// mostrada — o aviso de pasta vazia intercepta ANTES do
+	// survey.MultiSelect, não depois de uma seleção vazia confirmada.
+	screen := sess.Screen()
+	for _, naoEsperado := range []string{
+		"Selecione os arquivos",
+		"Sufixo do arquivo gerado",
+		"Idioma do OCR",
+	} {
+		if strings.Contains(screen, naoEsperado) {
+			t.Fatalf(
+				"encontrou %q na tela ao escolher uma pasta sem PDFs — o aviso deveria bloquear o avanço "+
+					"antes de qualquer pergunta seguinte.\n--- tela capturada ---\n%s",
+				naoEsperado, screen,
+			)
+		}
+	}
+
+	// Encerra o cenário de forma limpa: o aviso não avança a etapa, então o
+	// mesmo prompt de navegação está de volta na tela (o loop de
+	// PickFiles continua na mesma pasta) — escolhe "[ Cancelar ]" (terceiro
+	// item). As teclas enviadas aqui são absorvidas pelo pty mesmo que o
+	// redesenho ainda não tenha terminado (o kernel enfileira a entrada até
+	// o processo voltar a ler), então não é preciso um Expect extra entre
+	// o aviso e este envio.
+	sess.Down()
+	sess.Down()
+	sess.Enter()
+}
