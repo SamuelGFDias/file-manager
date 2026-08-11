@@ -18,6 +18,17 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.3.0] - 2026-08-11
+
+### Adicionado
+
+- **Auto-atualização: novo subcomando `update`.** Consulta o último release publicado no GitHub, compara com a versão em execução e, se houver uma mais nova, mostra a progressão (ex: `v0.1.0 → v0.2.1`) e o link do release antes de pedir confirmação. `-y`/`--yes` atualiza sem perguntar; `--check` só verifica, sem baixar nem substituir nada. Já na última versão, informa e sai sem erro. Build local (versão `dev`) é detectado e avisado. Antes de substituir o executável em uso, o binário baixado é executado para validação — um download corrompido aborta a troca sem tocar no executável atual. Novo pacote `internal/selfupdate`, sem dependências externas (só biblioteca padrão do Go).
+- **Aviso de versão nova no menu principal.** Quando há uma versão mais recente publicada, o menu exibe um aviso com a progressão de versão e o comando para atualizar. A verificação roda em segundo plano, uma única vez por sessão, e nunca bloqueia a abertura do menu. Sem internet, o menu abre normalmente e nenhum aviso aparece — falha de rede é silenciosa, nunca um erro na tela. Build local (`dev`) não gera aviso.
+
+### Modificado
+
+- **Interface mais legível.** No menu principal, a descrição de cada ferramenta agora aparece só na opção destacada (acompanhando a seta), em vez de todas ao mesmo tempo — feito sobrescrevendo o template de seleção do `survey`. A dica `[Use arrows to move, type to filter]`, única parte da interface em inglês, foi traduzida para `[use ↑ ↓ para navegar, digite para filtrar, Enter para confirmar]`. Novos helpers visuais em `internal/ui` (`Bold`, `Highlight`, `PathText`, `Count`, `Step`, `Divider`, `Blank`). O fluxo de `organize-pdf` passou a mostrar "Passo N de 7" em cada etapa, com separação entre blocos e destaque em caminhos e quantidades — sem alterar nenhum texto de pergunta nem a ordem das etapas.
+
 ## [0.2.1] - 2026-08-11
 
 ### Corrigido

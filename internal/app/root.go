@@ -1,11 +1,16 @@
 package app
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 
+	"github.com/AlecAivazis/survey/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/SamuelGFDias/file-manager/internal/selfupdate"
 	"github.com/SamuelGFDias/file-manager/internal/ui"
 	"github.com/SamuelGFDias/file-manager/internal/ui/docs"
 	"github.com/SamuelGFDias/file-manager/internal/ui/mainmenu"
@@ -53,7 +58,7 @@ func NewRootCommand(v Version) *cobra.Command {
 			}
 
 			nav := ui.NewNavigator()
-			return nav.Loop(mainmenu.NewScreen(Tools(), v.String()))
+			return nav.Loop(mainmenu.NewScreen(Tools(), v.String(), v.Version))
 		},
 	}
 
@@ -63,6 +68,7 @@ func NewRootCommand(v Version) *cobra.Command {
 
 	root.AddCommand(newDocsCommand(v))
 	root.AddCommand(newVersionCommand(v))
+	root.AddCommand(newUpdateCommand(v))
 
 	return root
 }
@@ -120,6 +126,121 @@ func newVersionCommand(v Version) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// newUpdateCommand monta o subcomando "update": consulta o último release
+// publicado no GitHub, compara com a versão em execução e, quando
+// autorizado, baixa e substitui o próprio executável. É o único caminho de
+// atualização para o usuário final, que não acompanha o repositório.
+func newUpdateCommand(v Version) *cobra.Command {
+	var yes bool
+	var checkOnly bool
+
+	cmd := &cobra.Command{
+		Use:          "update",
+		Short:        "Atualiza o file-manager para a última versão publicada",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+
+			ui.Infof("Consultando o último release publicado em %s...", selfupdate.DefaultRepo)
+
+			release, err := selfupdate.LatestRelease(ctx, selfupdate.DefaultRepo)
+			if err != nil {
+				return fmt.Errorf(
+					"erro ao consultar a última versão publicada; verifique sua conexão com a "+
+						"internet e tente novamente: %w", err,
+				)
+			}
+
+			current := v.Version
+
+			if _, verErr := selfupdate.ParseVersion(current); verErr != nil {
+				ui.Warnf(
+					"esta é uma compilação local (versão %q), não uma versão publicada oficialmente",
+					current,
+				)
+				ui.Infof("última versão publicada: %s (%s)", release.TagName, release.HTMLURL)
+			} else {
+				cmp, cmpErr := selfupdate.CompareVersions(current, release.TagName)
+				if cmpErr != nil {
+					return fmt.Errorf("erro ao comparar versões: %w", cmpErr)
+				}
+
+				if cmp >= 0 {
+					ui.Successf("você já está na versão mais recente (%s)", current)
+					return nil
+				}
+
+				ui.Infof("nova versão disponível: %s → %s", current, release.TagName)
+				ui.Infof("detalhes: %s", release.HTMLURL)
+			}
+
+			if checkOnly {
+				return nil
+			}
+
+			if !yes {
+				confirmed := false
+				question := &survey.Confirm{
+					Message: fmt.Sprintf("Atualizar para %s agora?", release.TagName),
+					Default: false,
+				}
+				if askErr := survey.AskOne(question, &confirmed); askErr != nil {
+					return askErr
+				}
+				if !confirmed {
+					ui.Infof("atualização cancelada")
+					return nil
+				}
+			}
+
+			assetName, err := selfupdate.AssetNameFor(runtime.GOOS, runtime.GOARCH)
+			if err != nil {
+				return err
+			}
+
+			asset, err := selfupdate.FindAsset(release, assetName)
+			if err != nil {
+				return err
+			}
+
+			tmpDir, err := os.MkdirTemp("", "file-manager-update-*")
+			if err != nil {
+				return fmt.Errorf("erro ao criar diretório temporário para o download: %w", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			tmpBinary := filepath.Join(tmpDir, assetName)
+
+			ui.Infof("baixando %s...", asset.URL)
+			if err := selfupdate.Download(ctx, asset.URL, tmpBinary); err != nil {
+				return fmt.Errorf("erro ao baixar a nova versão: %w", err)
+			}
+
+			ui.Infof("verificando o binário baixado...")
+			if err := selfupdate.VerifyBinary(ctx, tmpBinary); err != nil {
+				return err
+			}
+
+			if err := selfupdate.ReplaceExecutable(tmpBinary); err != nil {
+				return err
+			}
+
+			ui.Successf("atualizado: %s → %s", current, release.TagName)
+			ui.Infof("a nova versão vale a partir da próxima execução do file-manager")
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Atualiza sem pedir confirmação")
+	cmd.Flags().BoolVar(&checkOnly, "check", false, "Só verifica se há versão nova, sem baixar nem substituir")
+
+	return cmd
 }
 
 // Execute é o ponto de entrada chamado pelo main: monta e executa o

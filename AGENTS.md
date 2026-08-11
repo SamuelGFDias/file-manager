@@ -27,6 +27,7 @@ internal/config/                  Gerenciamento de perfis YAML (paths, validaç�
 internal/pdfutil/                 Núcleo: merge, split, organize, extração de texto (com fallback OCR)
 internal/ocr/                     Wrapper do executável externo tesseract (não é binding CGO)
 internal/regexcalib/              Sugestão de regex a partir de valor de exemplo
+internal/selfupdate/              Auto-atualização: consulta release, compara versão, baixa e substitui o executável
 internal/tools/                   Uma subpasta por ferramenta (mergepdf/, splitpdf/, organizepdf/)
 ```
 
@@ -172,6 +173,24 @@ Dois defeitos de usabilidade relatados por uso real (corrigidos na v0.2.1), ambo
   **Regra de precedência do `resolveStart` — não inverter:** um `start` explícito e não-vazio **sempre vence** sobre a memória; `LastDir()` só é consultado quando o chamador passa `start == ""`. Isso é proposital: um fluxo que encadeia seletores passando o diretório anterior como `start` (como `organize-pdf` faz) precisa que esse valor seja respeitado à risca, e `splitpdf`/`mergepdf` continuam passando `"."` explicitamente — se a memória pudesse sobrescrever um `start` explícito, o comportamento desses dois viraria imprevisível sem que ninguém tivesse pedido a mudança. Um futuro ajuste que "simplifique" trocando a ordem de checagem quebra essa garantia silenciosamente.
 
 - Novas funções `PickFileWithPrompt(start, prompt, exts)` / `PickDirWithPrompt(start, prompt)` aceitam uma mensagem específica de contexto (`PASTA DE ORIGEM`, `PASTA DE DESTINO`, `PDF de AMOSTRA`) em vez do genérico "Selecione um diretório"; `PickFile`/`PickDir` mantiveram as assinaturas antigas e passaram a delegar para as novas com uma mensagem padrão.
+
+### 12. Auto-atualização (`internal/selfupdate`)
+
+O usuário final não acompanha o repositório, então o subcomando `file-manager update` é o único caminho de atualização. Decisões relevantes para quem mexer em `internal/selfupdate` ou no aviso do menu principal:
+
+- **Checagem em segundo plano, uma vez por sessão, falha silenciosa.** `selfupdate.Checker` dispara a consulta ao GitHub em goroutine (`Start()`, idempotente via `sync.Once`) no momento em que o menu principal é construído (`mainmenu.NewScreen`), e `Notice()` só lê o resultado já pronto, sem nunca bloquear. Qualquer erro — rede indisponível, limite de requisições da API, versão local não-semver (`dev`) — termina em silêncio, sem preencher o aviso: o usuário não veio até o menu para depurar conectividade. Uma checagem síncrona travaria a abertura do menu; uma checagem a cada redesenho da tela bateria no limite de requisições da API do GitHub.
+- **Binário baixado é validado por execução antes da troca.** `VerifyBinary` roda `<binário-baixado> version` e falha se o processo não sair limpo ou não produzir saída — sinal de download truncado/corrompido. Só depois disso `ReplaceExecutable` é chamado; um download corrompido nunca chega a substituir o executável em uso.
+- **Substituição via rename, com tratamento especial no Windows.** `ReplaceExecutable`/`replaceAt` usa `os.Rename` por cima do executável atual — em Linux/macOS isso funciona mesmo com o processo em execução (o processo antigo continua servindo o inode até terminar). No Windows não é possível sobrescrever nem apagar um `.exe` em execução, então `replaceWindows` renomeia o executável atual para `<nome>.old`, move o novo binário para o lugar dele e tenta apagar o `.old` (best-effort — o Windows só libera o arquivo depois que o processo antigo terminar). Se mover o novo binário falhar, o `.old` é restaurado para o nome original: deixar o usuário sem executável nenhum é o pior resultado possível.
+- **`LatestRelease`/`Download` só aceitam HTTPS.** Baixar e depois executar um binário recebido por canal não autenticado seria um vetor óbvio de comprometimento; `Download` rejeita qualquer URL que não comece com `https://`.
+
+### 13. Tema do `survey` Sobrescrito em `internal/ui`
+
+`internal/ui/prompt.go` sobrescreve `survey.SelectQuestionTemplate` (função `ApplyTheme`, chamada uma única vez — idempotente via `sync.Once` — a partir de `mainmenu.NewScreen`, o ponto de entrada de toda sessão interativa) para dois ajustes de apresentação:
+
+1. A descrição de uma opção de `survey.Select` só aparece quando ela é a opção **atualmente selecionada** (acompanha a seta), em vez de todas as opções ao mesmo tempo.
+2. A dica em inglês `[Use arrows to move, type to filter]` foi traduzida para `[use ↑ ↓ para navegar, digite para filtrar, Enter para confirmar]`.
+
+**Importante para quem for mexer nesse template:** `selectQuestionTemplatePT` em `internal/ui/prompt.go` é uma **cópia adaptada** do template padrão da biblioteca (`survey.SelectQuestionTemplate`, survey v2.3.7, `select.go`), não uma implementação própria. Qualquer atualização da dependência `survey` que mude o template original pode exigir portar a mudança manualmente para essa cópia — não há vínculo automático entre os dois. Fora os dois ajustes acima, o template foi mantido idêntico ao original de propósito: o objetivo é uma mudança cirúrgica de apresentação, não uma reescrita do comportamento do prompt.
 
 ## Fluxo para Adicionar Uma Ferramenta Nova
 

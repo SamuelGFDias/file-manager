@@ -22,6 +22,8 @@ make build-all  # Compila para Linux e Windows (amd64)
 
 Veja a seção de releases do repositório para baixar o binário pré-compilado para sua plataforma.
 
+Uma vez instalado, atualizar para a versão mais nova é só rodar `file-manager update` — veja a seção [Atualização](#atualização) abaixo.
+
 ## Uso rápido
 
 Para abrir o menu interativo com todas as ferramentas disponíveis:
@@ -121,6 +123,25 @@ file-manager organize-pdf -i ./invoices -o ./invoices_organized \
 ```
 
 Com zero `--level`, a ferramenta funciona como um renomeador em lote dos PDFs.
+
+## Atualização
+
+`file-manager update` consulta o último release publicado no GitHub, compara com a versão em execução e, se houver uma mais nova, pede confirmação antes de baixar e substituir o próprio executável.
+
+| Flag | Descrição |
+|------|-----------|
+| `-y, --yes` | Atualiza sem pedir confirmação |
+| `--check` | Só verifica se há versão nova, sem baixar nem substituir nada |
+
+```bash
+file-manager update           # verifica e pede confirmação
+file-manager update -y        # atualiza sem perguntar
+file-manager update --check   # só verifica
+```
+
+Se já estiver na última versão, o comando informa e sai sem erro. Antes de substituir o executável atual, o binário baixado é executado para validação — um download corrompido aborta a atualização sem tocar no executável em uso.
+
+Além disso, o menu principal verifica em segundo plano (uma vez por sessão, sem nunca bloquear a abertura do menu) se há uma versão mais nova e, se houver, exibe um aviso com a progressão de versão e o comando para atualizar. Sem internet, o menu abre normalmente e nenhum aviso aparece.
 
 ## Perfis
 

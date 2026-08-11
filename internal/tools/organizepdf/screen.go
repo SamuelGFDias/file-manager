@@ -32,6 +32,13 @@ const (
 	maxSampleAttempts    = 5
 )
 
+// totalConfigSteps é a quantidade de etapas principais exibidas via
+// ui.Step() durante o fluxo interativo de organize-pdf: pasta de origem,
+// pasta de destino, modo de OCR, calibração dos níveis, nome do arquivo,
+// copiar/mover e teste de calibragem. Puramente de apresentação — não afeta
+// a lógica de configuração nem de processamento.
+const totalConfigSteps = 7
+
 // screen é a tela interativa da ferramenta organize-pdf.
 type screen struct {
 	tool *Tool
@@ -126,11 +133,13 @@ func (t *Tool) configure() (sampleText string, err error) {
 		return "", err
 	}
 	t.opts.InputDir = inputDir
+	ui.Blank()
 
 	// Continua a navegação a partir da pasta de origem recém-selecionada, em
 	// vez de reabrir em "." (diretório de trabalho do processo — na prática
 	// a pasta onde o executável foi deixado). Na esmagadora maioria dos
 	// casos o destino é a mesma pasta, uma irmã ou uma subpasta dela.
+	ui.Step(2, totalConfigSteps, "Pasta de destino")
 	outputDir, err := filepicker.PickDirWithPrompt(
 		inputDir,
 		"Selecione a PASTA DE DESTINO (onde a estrutura será criada)",
@@ -139,15 +148,18 @@ func (t *Tool) configure() (sampleText string, err error) {
 		return "", err
 	}
 	t.opts.OutputDir = outputDir
+	ui.Blank()
 
 	if err := t.askOCRMode(); err != nil {
 		return "", err
 	}
+	ui.Blank()
 
 	samplePath, err := t.pickSample()
 	if err != nil {
 		return "", err
 	}
+	ui.Blank()
 
 	// Crítico: a calibração precisa enxergar exatamente o mesmo texto que o
 	// processamento vai enxergar depois. Usar t.textOptions() aqui garante
@@ -162,21 +174,24 @@ func (t *Tool) configure() (sampleText string, err error) {
 
 	text, extractErr := pdfutil.ExtractTextOpts(context.Background(), samplePath, textOpts)
 	if extractErr != nil {
-		ui.Warnf("não foi possível extrair texto de %s: %v", samplePath, extractErr)
+		ui.Warnf("não foi possível extrair texto de %s: %v", ui.PathText(samplePath), extractErr)
 		text = ""
 	}
 
 	if err := t.configureLevels(text); err != nil {
 		return "", err
 	}
+	ui.Blank()
 
 	if err := t.configureFilenameRegex(text); err != nil {
 		return "", err
 	}
+	ui.Blank()
 
 	if err := t.configureCopyOrMove(); err != nil {
 		return "", err
 	}
+	ui.Blank()
 
 	t.showConfigSummary(pdfCount)
 
@@ -194,6 +209,8 @@ func (t *Tool) configure() (sampleText string, err error) {
 // próximo prompt continua da pasta que ele acabou de tentar, não do zero —
 // senão ele reprova exatamente o mesmo caminho de navegação de novo.
 func (t *Tool) pickInputDir() (dir string, pdfCount int, err error) {
+	ui.Step(1, totalConfigSteps, "Pasta de origem")
+
 	start := "."
 	for attempt := 0; attempt < maxSourceDirAttempts; attempt++ {
 		dir, err = filepicker.PickDirWithPrompt(
@@ -211,7 +228,7 @@ func (t *Tool) pickInputDir() (dir string, pdfCount int, err error) {
 		}
 
 		if count > 0 {
-			ui.Infof("%d PDFs encontrados na pasta de origem.", count)
+			ui.Infof("%s encontrados na pasta de origem.", ui.Count(count, "PDF", "PDFs"))
 			return dir, count, nil
 		}
 
@@ -219,7 +236,7 @@ func (t *Tool) pickInputDir() (dir string, pdfCount int, err error) {
 		if absErr != nil {
 			absDir = dir
 		}
-		ui.Warnf("a pasta selecionada (%s) não contém nenhum arquivo PDF.", absDir)
+		ui.Warnf("a pasta selecionada (%s) não contém nenhum arquivo PDF.", ui.PathText(absDir))
 
 		choice := ""
 		if err := survey.AskOne(&survey.Select{
@@ -266,7 +283,7 @@ func (t *Tool) pickSample() (string, error) {
 		ui.Warnf(
 			"o PDF de amostra escolhido (%s) não está dentro da pasta de origem (%s); "+
 				"as regras serão calibradas contra um documento que não faz parte do lote a processar.",
-			samplePath, t.opts.InputDir,
+			ui.PathText(samplePath), ui.PathText(t.opts.InputDir),
 		)
 
 		useAnyway := false
@@ -305,10 +322,13 @@ func (t *Tool) showConfigSummary(pdfCount int) {
 		action = "movidos"
 	}
 
+	ui.Divider()
 	ui.Infof(
-		"Resumo: %d PDFs em %s serão %s para %s.",
-		pdfCount, inputAbs, action, outputAbs,
+		"%s: %s em %s serão %s para %s.",
+		ui.Bold("Resumo"), ui.Count(pdfCount, "PDF", "PDFs"), ui.PathText(inputAbs), action, ui.PathText(outputAbs),
 	)
+	ui.Divider()
+	ui.Blank()
 }
 
 // countPDFs devolve quantos arquivos PDF há no diretório.
@@ -353,6 +373,8 @@ func sampleOutsideInput(samplePath, inputDir string) (bool, error) {
 // é o modo "somente renomear", em que os arquivos vão direto para a pasta
 // de destino, sem subpastas.
 func (t *Tool) configureLevels(sampleText string) error {
+	ui.Step(4, totalConfigSteps, "Calibração dos níveis")
+
 	t.opts.Levels = nil
 
 	for {
@@ -395,6 +417,8 @@ func (t *Tool) configureLevels(sampleText string) error {
 // configureFilenameRegex pergunta se os arquivos devem ser renomeados a
 // partir do conteúdo e, em caso afirmativo, calibra a regex de nome.
 func (t *Tool) configureFilenameRegex(sampleText string) error {
+	ui.Step(5, totalConfigSteps, "Nome do arquivo")
+
 	rename := true
 	if err := survey.AskOne(&survey.Confirm{
 		Message: "Renomear os arquivos com base no conteúdo?",
@@ -427,6 +451,8 @@ func (t *Tool) configureFilenameRegex(sampleText string) error {
 // usuário é avisado uma única vez — assim ele entende, já de saída, por
 // que PDFs digitalizados vão cair em não-classificados.
 func (t *Tool) askOCRMode() error {
+	ui.Step(3, totalConfigSteps, "Modo de OCR")
+
 	if !ocr.NewTesseract().Available() {
 		t.opts.OCR = "never"
 		ui.Infof(
@@ -465,6 +491,8 @@ func (t *Tool) askOCRMode() error {
 // configureCopyOrMove pergunta se os arquivos devem ser copiados (padrão,
 // não destrutivo) ou movidos.
 func (t *Tool) configureCopyOrMove() error {
+	ui.Step(6, totalConfigSteps, "Copiar ou mover")
+
 	choice := ""
 	if err := survey.AskOne(&survey.Select{
 		Message: "Copiar ou mover os arquivos?",
@@ -490,6 +518,8 @@ func (s *screen) testAndApplyCycle(nav *ui.Navigator, sampleText string) error {
 	t := s.tool
 
 	for cycle := 0; cycle < maxCalibrationCycles; cycle++ {
+		ui.Step(7, totalConfigSteps, "Teste de calibragem")
+
 		sample, err := askTestSampleSize()
 		if err != nil {
 			return err
@@ -500,6 +530,7 @@ func (s *screen) testAndApplyCycle(nav *ui.Navigator, sampleText string) error {
 			return err
 		}
 
+		ui.Blank()
 		ui.Successf("%s", result.Summary)
 		for _, detail := range result.Details {
 			ui.Warnf("%s", detail)
@@ -512,6 +543,7 @@ func (s *screen) testAndApplyCycle(nav *ui.Navigator, sampleText string) error {
 					"afrouxar a regex antes de desistir.",
 			)
 		}
+		ui.Blank()
 
 		action := ""
 		if err := survey.AskOne(&survey.Select{

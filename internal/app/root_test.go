@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestTools(t *testing.T) {
@@ -57,7 +59,7 @@ func TestNewRootCommandHasSubcommands(t *testing.T) {
 		names[c.Name()] = true
 	}
 
-	wantNames := []string{"merge-pdf", "split-pdf", "organize-pdf", "docs", "version"}
+	wantNames := []string{"merge-pdf", "split-pdf", "organize-pdf", "docs", "version", "update"}
 	for _, want := range wantNames {
 		if !names[want] {
 			t.Errorf("subcomando %q não encontrado; subcomandos presentes: %v", want, names)
@@ -100,6 +102,34 @@ func TestDocsExportCommandFlags(t *testing.T) {
 
 	if !found {
 		t.Fatalf("subcomando \"docs export\" não encontrado")
+	}
+}
+
+func TestUpdateCommandFlags(t *testing.T) {
+	cmd := NewRootCommand(Version{Version: "0.1.0", Commit: "abc1234", Date: "2026-08-11T12:00:00Z"})
+
+	var update *cobra.Command
+	for _, c := range cmd.Commands() {
+		if c.Name() == "update" {
+			update = c
+			break
+		}
+	}
+
+	if update == nil {
+		t.Fatalf("subcomando \"update\" não encontrado")
+	}
+
+	yesFlag := update.Flags().Lookup("yes")
+	if yesFlag == nil {
+		t.Fatalf("subcomando update não tem a flag --yes")
+	}
+	if yesFlag.Shorthand != "y" {
+		t.Errorf("flag --yes tem shorthand %q, esperava \"y\"", yesFlag.Shorthand)
+	}
+
+	if update.Flags().Lookup("check") == nil {
+		t.Errorf("subcomando update não tem a flag --check")
 	}
 }
 
