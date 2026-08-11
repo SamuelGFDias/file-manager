@@ -196,6 +196,136 @@ func TestLoadNonexistentIDErrors(t *testing.T) {
 	}
 }
 
+// saveUndone grava um manifesto e imediatamente o marca como desfeito em
+// undoneAt — atalho usado pelos testes de Prune, que precisam de manifestos
+// já desfeitos em datas específicas.
+func saveUndone(t *testing.T, undoneAt time.Time) string {
+	t.Helper()
+
+	m := sampleManifest()
+	if _, err := Save(m); err != nil {
+		t.Fatalf("Save() erro inesperado: %v", err)
+	}
+
+	manifests, err := List()
+	if err != nil {
+		t.Fatalf("List() erro inesperado: %v", err)
+	}
+	id := manifests[0].ID
+
+	if err := MarkUndone(id, undoneAt); err != nil {
+		t.Fatalf("MarkUndone() erro inesperado: %v", err)
+	}
+
+	return id
+}
+
+func TestPruneRemovesUndoneManifestsOlderThanRetention(t *testing.T) {
+	withTempConfigDir(t)
+
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.Local)
+	retention := 30 * 24 * time.Hour
+
+	expiredID := saveUndone(t, now.Add(-31*24*time.Hour))
+
+	removed, err := Prune(now, retention)
+	if err != nil {
+		t.Fatalf("Prune() erro inesperado: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != expiredID {
+		t.Fatalf("Prune() removeu %v, esperava só [%q]", removed, expiredID)
+	}
+
+	if _, err := Load(expiredID); err == nil {
+		t.Fatalf("manifesto %q deveria ter sido removido do disco", expiredID)
+	}
+}
+
+func TestPruneKeepsRecentlyUndoneManifests(t *testing.T) {
+	withTempConfigDir(t)
+
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.Local)
+	retention := 30 * 24 * time.Hour
+
+	recentID := saveUndone(t, now.Add(-1*time.Hour))
+
+	removed, err := Prune(now, retention)
+	if err != nil {
+		t.Fatalf("Prune() erro inesperado: %v", err)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("Prune() removeu %v, esperava nada (manifesto desfeito há só 1h, retenção de 30 dias)", removed)
+	}
+
+	if _, err := Load(recentID); err != nil {
+		t.Fatalf("manifesto %q não deveria ter sido removido: %v", recentID, err)
+	}
+}
+
+// TestPruneKeepsPendingManifestsRegardlessOfAge é a garantia central de
+// Prune: um manifesto NUNCA desfeito não pode ser removido automaticamente,
+// não importa o quão antigo — é a única coisa que permite ao usuário
+// desfazer aquela operação mais tarde.
+func TestPruneKeepsPendingManifestsRegardlessOfAge(t *testing.T) {
+	withTempConfigDir(t)
+
+	veryOld := sampleManifest()
+	veryOld.CreatedAt = time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local)
+	if _, err := Save(veryOld); err != nil {
+		t.Fatalf("Save() erro inesperado: %v", err)
+	}
+
+	manifests, err := List()
+	if err != nil {
+		t.Fatalf("List() erro inesperado: %v", err)
+	}
+	pendingID := manifests[0].ID
+	if manifests[0].UndoneAt != nil {
+		t.Fatal("pré-condição do teste falhou: manifesto deveria estar pendente")
+	}
+
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.Local)
+	removed, err := Prune(now, 30*24*time.Hour)
+	if err != nil {
+		t.Fatalf("Prune() erro inesperado: %v", err)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("Prune() removeu %v, esperava nada — manifesto pendente nunca é removido automaticamente", removed)
+	}
+
+	if _, err := Load(pendingID); err != nil {
+		t.Fatalf("manifesto pendente %q não deveria ter sido removido: %v", pendingID, err)
+	}
+}
+
+// TestSaveAutomaticallyPrunesExpiredUndoneManifests confirma que Save()
+// aciona a poda de manifestos já desfeitos e expirados como efeito
+// colateral — é assim que "undo --list" deixa de crescer sem limite sem
+// exigir nenhum comando de manutenção manual.
+func TestSaveAutomaticallyPrunesExpiredUndoneManifests(t *testing.T) {
+	withTempConfigDir(t)
+
+	expiredID := saveUndone(t, time.Now().Add(-(PruneRetention + time.Hour)))
+
+	// A próxima gravação real (ex: um novo organize-pdf) é quem dispara a
+	// poda, usando time.Now() internamente.
+	if _, err := Save(sampleManifest()); err != nil {
+		t.Fatalf("Save() erro inesperado: %v", err)
+	}
+
+	if _, err := Load(expiredID); err == nil {
+		t.Fatalf("manifesto expirado %q deveria ter sido removido pela poda automática de Save()", expiredID)
+	}
+
+	manifests, err := List()
+	if err != nil {
+		t.Fatalf("List() erro inesperado: %v", err)
+	}
+	if len(manifests) != 1 {
+		t.Fatalf("List() devolveu %d manifestos após a poda, esperava 1 (só o recém-gravado)", len(manifests))
+	}
+}
+
 func TestDirComposesUserConfigDirWithAppName(t *testing.T) {
 	base := withTempConfigDir(t)
 

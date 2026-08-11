@@ -175,6 +175,14 @@ func Save(m Manifest) (path string, err error) {
 		return "", fmt.Errorf("erro ao gravar manifesto em %q: %w", p, err)
 	}
 
+	// Poda best-effort de manifestos já desfeitos e expirados (ver Prune):
+	// mesmo princípio já usado para o próprio manifesto de histórico e para
+	// o relatório de organize-pdf — uma tarefa de manutenção secundária
+	// nunca pode fazer uma gravação que já aconteceu de verdade parecer que
+	// falhou. Erro aqui é silenciosamente ignorado; a próxima chamada a
+	// Save tenta de novo.
+	_, _ = Prune(time.Now(), PruneRetention)
+
 	return p, nil
 }
 
@@ -241,6 +249,52 @@ func List() ([]Manifest, error) {
 	})
 
 	return manifests, nil
+}
+
+// PruneRetention é o tempo mínimo que um manifesto já desfeito continua no
+// disco, contado a partir de UndoneAt, antes de se tornar elegível para
+// remoção por Prune. Só afeta manifestos JÁ desfeitos: um manifesto
+// pendente (UndoneAt == nil) nunca é removido automaticamente, por mais
+// antigo que seja — é exatamente ele que permite desfazer aquela operação,
+// e apagá-lo sem o usuário pedir tiraria essa capacidade em silêncio. Sem
+// essa distinção, "undo --list" e o diretório de histórico cresceriam sem
+// limite: uma operação real de organize-pdf gera um manifesto, e nada nunca
+// os removia.
+const PruneRetention = 30 * 24 * time.Hour
+
+// Prune remove do disco os manifestos já desfeitos (UndoneAt != nil) há mais
+// de retention, contado a partir de now. Devolve os IDs efetivamente
+// removidos (nunca nil; slice vazio quando nada foi removido). Nenhum
+// manifesto pendente é tocado — ver PruneRetention. Erro ao listar o
+// diretório de histórico é propagado; erro ao remover um manifesto
+// específico interrompe a poda e devolve, junto do erro, os IDs já
+// removidos até ali (nunca deixa a chamadora sem saber o que já foi feito).
+func Prune(now time.Time, retention time.Duration) ([]string, error) {
+	dir, err := Dir()
+	if err != nil {
+		return nil, err
+	}
+
+	manifests, err := List()
+	if err != nil {
+		return nil, err
+	}
+
+	removed := make([]string, 0)
+	for _, m := range manifests {
+		if m.UndoneAt == nil {
+			continue
+		}
+		if now.Sub(*m.UndoneAt) < retention {
+			continue
+		}
+		if err := os.Remove(manifestPath(dir, m.ID)); err != nil {
+			return removed, fmt.Errorf("erro ao remover manifesto expirado %q: %w", m.ID, err)
+		}
+		removed = append(removed, m.ID)
+	}
+
+	return removed, nil
 }
 
 // MarkUndone carrega o manifesto de ID informado, grava UndoneAt = when e

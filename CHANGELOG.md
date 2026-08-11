@@ -12,6 +12,10 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 
 ## [Não publicado]
 
+### Corrigido
+
+- **`undo --list` e o diretório de histórico não cresciam mais nunca.** Nenhum manifesto de operação (`~/.config/file-manager/history/*.yaml` ou equivalente no Windows) era removido do disco depois de gravado — nem mesmo os já desfeitos. `internal/history.Prune` remove automaticamente, a cada gravação nova (`Save`), os manifestos já desfeitos há mais de 30 dias (`PruneRetention`); manifestos ainda pendentes (nunca desfeitos) **não são tocados**, não importa a idade — continuam disponíveis para `undo --id`/`undo --last` indefinidamente. Nenhuma flag ou comportamento visível muda; só o acúmulo em disco para.
+
 ### Planejado
 
 - [ ] Suporte para criptografia de perfis
