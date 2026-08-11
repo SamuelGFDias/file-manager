@@ -838,7 +838,7 @@ Nesta seção ficam registradas **quatro melhorias já avaliadas e conscientemen
 
 **Por que foi considerada:** O canal de comunicação (GitHub releases) e o armazenamento de artefatos (próprio repositório) são autenticados por TLS; a validação por execução (`VerifyBinary`) já cobre o caso realista (download incompleto ou corrompido durante a transmissão). O ganho da verificação criptográfica seria contra um cenário de comprometimento mais profundo: o servidor GitHub sendo invadido, ou o armazenamento de artefatos sendo alterado depois de publicado. Cenário plausível em teoria; raro na prática.
 
-**Por que não é urgente:** O mecanismo existente de execução validante (`VerifyBinary`) funciona bem. A chance de um ataque sofisticado o bastante para alterar artefatos publicados mas não conseguir alterar o GitHub como um todo (ou a conexão HTTPS do usuário) é pequena o bastante para não jusitificar o trabalho hoje. Se publicar SHA256SUMS ficar na prioridade futura, considere também publicá-lo assinado com GPG.
+**Por que não é urgente:** O mecanismo existente de execução validante (`VerifyBinary`) funciona bem. A chance de um ataque sofisticado o bastante para alterar artefatos publicados mas não conseguir alterar o GitHub como um todo (ou a conexão HTTPS do usuário) é pequena o bastante para não justificar o trabalho hoje. Se publicar SHA256SUMS ficar na prioridade futura, considere também publicá-lo assinado com GPG.
 
 ### 2. Normalização do Texto Vindo de OCR
 
