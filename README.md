@@ -2,6 +2,8 @@
 
 Um conjunto de ferramentas de linha de comando para gerenciar, manipular e organizar arquivos PDF com precisão e automação.
 
+A partir da versão 1.0.0, a interface é considerada estável: comandos, flags e o formato do arquivo de perfis salvos não mudam de forma incompatível sem que isso venha marcado como uma versão 2.0.0.
+
 ## Instalação
 
 ### Compilar do código-fonte
