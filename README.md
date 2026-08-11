@@ -69,6 +69,8 @@ Separa um PDF em múltiplos arquivos. Suporta três modos: por página individua
 | `--regex` | string | Padrão regex (para mode=regex); grupo de captura vira parte do nome do arquivo |
 | `--name-template` | string | Template do nome dos arquivos de saída (variáveis: `{{.Index}}`, `{{.Match}}`) |
 | `--overwrite` | bool | Sobrescrever arquivos de saída se existirem |
+| `--ocr` | string | Uso de OCR em PDFs sem texto (só afeta `--mode regex`): `auto`, `always` ou `never` (default: `auto`) |
+| `--ocr-lang` | string | Idioma do OCR (ex: `por`, `eng`) (default: `por`) |
 
 **Exemplos:**
 
@@ -99,6 +101,8 @@ Organiza PDFs de uma pasta em uma hierarquia de subpastas com base no conteúdo 
 | `--dry-run` | bool | Simular a operação sem executar |
 | `--sample` | int | Testar com apenas N arquivos (útil antes de processar tudo) |
 | `--overwrite` | bool | Sobrescrever arquivos existentes |
+| `--ocr` | string | Uso de OCR em PDFs sem texto embutido: `auto` (só quando não há texto), `always` ou `never` (default: `auto`) |
+| `--ocr-lang` | string | Idioma do OCR (ex: `por`, `eng`) (default: `por`) |
 
 **Exemplos:**
 
@@ -198,8 +202,24 @@ make fmt        # Formatar código
 make clean      # Remover artefatos de build
 ```
 
+## OCR
+
+`split-pdf --mode regex` e `organize-pdf --level` classificam PDFs pelo conteúdo textual. Em um PDF digitalizado (imagem sem camada de texto), esse conteúdo não existe — por isso a ferramenta oferece OCR como alternativa: quando a página não tem texto embutido, a imagem da página é extraída e lida pelo [Tesseract](https://github.com/tesseract-ocr/tesseract).
+
+Controlado pelas flags `--ocr` (`auto`, `always` ou `never`; default `auto`, que só aciona o OCR quando a página não tem texto) e `--ocr-lang` (idioma, default `por`).
+
+**Requer o Tesseract instalado no sistema** — não é embutido no binário:
+
+- **Windows:** instalador do [UB Mannheim](https://github.com/UB-Mannheim/tesseract/wiki), marcando o idioma Português durante a instalação.
+- **Linux (Fedora/RHEL):** `sudo dnf install tesseract tesseract-langpack-por`
+- **Linux (Debian/Ubuntu):** `sudo apt install tesseract-ocr tesseract-ocr-por`
+
+Sem o Tesseract instalado, a ferramenta continua funcionando normalmente para PDFs com texto — apenas emite um aviso com a instrução de instalação acima e segue sem OCR.
+
+**Custo:** o OCR é lento comparado à extração de texto nativa — aproximadamente 1 segundo por página. Para PDFs grandes, isso pode ser perceptível.
+
+**Precisão:** o reconhecimento de caracteres não é perfeito (ex.: `ESCOLA` pode ser lido como `ESCO`, `0` pode ser confundido com `O`). Ao escrever regex para conteúdo que pode ter passado por OCR, prefira padrões tolerantes a esse tipo de erro em vez de casamentos exatos.
+
 ## Limitações conhecidas
 
-**A ferramenta não realiza OCR.** PDFs digitalizados (imagem sem camada de texto) não funcionam nos modos que dependem de regex sobre o conteúdo, como `split-pdf --mode regex` e `organize-pdf --level`. Para esses PDFs, use modos baseados em metadados ou estrutura do arquivo (ex: `split-pdf --mode page`).
-
-Se você precisar processar PDFs digitalizados, é necessário extrair o texto via OCR em uma etapa anterior com ferramenta especializada.
+Para PDFs digitalizados sem o Tesseract instalado (ou com `--ocr never`), os modos que dependem de regex sobre o conteúdo não funcionam. Use modos baseados em metadados ou estrutura do arquivo (ex: `split-pdf --mode page`) ou instale o Tesseract conforme a seção OCR acima.

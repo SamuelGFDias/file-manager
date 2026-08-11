@@ -1,6 +1,7 @@
 package organizepdf
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 
+	"github.com/SamuelGFDias/file-manager/internal/ocr"
 	"github.com/SamuelGFDias/file-manager/internal/pdfutil"
 	"github.com/SamuelGFDias/file-manager/internal/ui"
 	"github.com/SamuelGFDias/file-manager/internal/ui/calibrate"
@@ -120,12 +122,27 @@ func (t *Tool) configure() (sampleText string, err error) {
 	}
 	t.opts.OutputDir = outputDir
 
+	if err := t.askOCRMode(); err != nil {
+		return "", err
+	}
+
 	samplePath, err := filepicker.PickFile(t.opts.InputDir, []string{".pdf"})
 	if err != nil {
 		return "", err
 	}
 
-	text, extractErr := pdfutil.ExtractText(samplePath)
+	// Crítico: a calibração precisa enxergar exatamente o mesmo texto que o
+	// processamento vai enxergar depois. Usar t.textOptions() aqui garante
+	// que os dois lados (calibração e runWith) nunca divirjam nas opções de
+	// OCR — calibrar contra texto sem OCR e processar com OCR (ou o
+	// contrário) faria a regex parecer certa ou errada por um motivo que
+	// não tem nada a ver com a regex em si.
+	textOpts, err := t.textOptions()
+	if err != nil {
+		return "", err
+	}
+
+	text, extractErr := pdfutil.ExtractTextOpts(context.Background(), samplePath, textOpts)
 	if extractErr != nil {
 		ui.Warnf("não foi possível extrair texto de %s: %v", samplePath, extractErr)
 		text = ""
@@ -219,6 +236,48 @@ func (t *Tool) configureFilenameRegex(sampleText string) error {
 	return nil
 }
 
+// askOCRMode pergunta, antes de qualquer calibração, se o OCR deve ser
+// usado como recurso para PDFs sem texto embutido (digitalizados). Só faz
+// a pergunta quando o Tesseract está de fato disponível no sistema: sem
+// ele não há escolha real a fazer, então o modo é forçado para "never" e o
+// usuário é avisado uma única vez — assim ele entende, já de saída, por
+// que PDFs digitalizados vão cair em não-classificados.
+func (t *Tool) askOCRMode() error {
+	if !ocr.NewTesseract().Available() {
+		t.opts.OCR = "never"
+		ui.Infof(
+			"OCR indisponível: Tesseract não encontrado. PDFs digitalizados (sem camada de texto) não serão lidos. %s",
+			ocr.InstallHint(),
+		)
+		return nil
+	}
+
+	const (
+		optAuto   = "Automático (recomendado)"
+		optAlways = "Sempre"
+		optNever  = "Nunca"
+	)
+
+	choice := ""
+	if err := survey.AskOne(&survey.Select{
+		Message: "Usar OCR em PDFs sem texto (digitalizados)?",
+		Options: []string{optAuto, optAlways, optNever},
+	}, &choice); err != nil {
+		return err
+	}
+
+	switch choice {
+	case optAlways:
+		t.opts.OCR = "always"
+	case optNever:
+		t.opts.OCR = "never"
+	default:
+		t.opts.OCR = "auto"
+	}
+
+	return nil
+}
+
 // configureCopyOrMove pergunta se os arquivos devem ser copiados (padrão,
 // não destrutivo) ou movidos.
 func (t *Tool) configureCopyOrMove() error {
@@ -260,6 +319,14 @@ func (s *screen) testAndApplyCycle(nav *ui.Navigator, sampleText string) error {
 		ui.Successf("%s", result.Summary)
 		for _, detail := range result.Details {
 			ui.Warnf("%s", detail)
+		}
+
+		if t.ocrActive() {
+			ui.Infof(
+				"OCR foi usado para ler PDFs sem texto embutido; a leitura pode conter erros de reconhecimento " +
+					"(caracteres trocados, palavras coladas etc.). Se algum arquivo esperado não casou, considere " +
+					"afrouxar a regex antes de desistir.",
+			)
 		}
 
 		action := ""

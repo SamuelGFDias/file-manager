@@ -158,10 +158,12 @@ func TestExpectedFlagsExist(t *testing.T) {
 		{"overwrite", ""},
 		{"dry-run", ""},
 		{"sample", ""},
+		{"ocr", ""},
+		{"ocr-lang", ""},
 	}
 
-	if len(cases) != 9 {
-		t.Fatalf("teste declara %d flags, esperava 9", len(cases))
+	if len(cases) != 11 {
+		t.Fatalf("teste declara %d flags, esperava 11", len(cases))
 	}
 
 	for _, c := range cases {
@@ -183,6 +185,12 @@ func TestDefaultOptions(t *testing.T) {
 	}
 	if opts.Move != false {
 		t.Error("defaultOptions().Move deveria ser false — o padrão é copiar (não destrutivo); se isso falhou, a ferramenta ficou destrutiva por padrão")
+	}
+	if opts.OCR != "auto" {
+		t.Errorf("defaultOptions().OCR = %q, want %q", opts.OCR, "auto")
+	}
+	if opts.OCRLang != "por" {
+		t.Errorf("defaultOptions().OCRLang = %q, want %q", opts.OCRLang, "por")
 	}
 }
 
@@ -223,6 +231,53 @@ func TestRunInvalidLevelRegexErrorsWithoutPanic(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "fornecedor") {
 		t.Errorf("erro %q deveria mencionar o rótulo do nível problemático", err.Error())
+	}
+}
+
+func TestRunInvalidOCRModeErrorsWithoutPanic(t *testing.T) {
+	tl := New()
+	tl.opts = Options{
+		InputDir:  "entrada",
+		OutputDir: "saida",
+		OCR:       "xyz",
+	}
+
+	_, err := tl.run()
+	if err == nil {
+		t.Fatal("run() com --ocr inválido (\"xyz\") deveria devolver erro")
+	}
+	for _, want := range []string{"auto", "always", "never"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("erro %q deveria mencionar o valor válido %q", err.Error(), want)
+		}
+	}
+}
+
+func TestTextOptionsOCRNeverHasNoEngine(t *testing.T) {
+	tl := New()
+	tl.opts.OCR = "never"
+	tl.opts.OCRLang = "por"
+
+	opts, err := tl.textOptions()
+	if err != nil {
+		t.Fatalf("textOptions() erro inesperado: %v", err)
+	}
+	if opts.Engine != nil {
+		t.Errorf("textOptions() com OCR=never deveria devolver Engine nil, obteve %#v", opts.Engine)
+	}
+}
+
+func TestTextOptionsOCRAutoHasEngine(t *testing.T) {
+	tl := New()
+	tl.opts.OCR = "auto"
+	tl.opts.OCRLang = "por"
+
+	opts, err := tl.textOptions()
+	if err != nil {
+		t.Fatalf("textOptions() erro inesperado: %v", err)
+	}
+	if opts.Engine == nil {
+		t.Error("textOptions() com OCR=auto deveria devolver Engine != nil (mesmo que o motor não esteja instalado — Engine só reflete se o modo permite OCR, não se o Tesseract está presente)")
 	}
 }
 

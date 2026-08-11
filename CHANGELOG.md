@@ -18,6 +18,21 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.2.0] - 2026-08-11
+
+### Adicionado
+
+- **Suporte a OCR** para PDFs digitalizados (sem camada de texto): quando `split-pdf --mode regex` ou `organize-pdf --level` encontram uma página sem texto embutido, a imagem da página é extraída pelo pdfcpu e lida via [Tesseract](https://github.com/tesseract-ocr/tesseract) (executável externo, invocado por `os/exec` — não é binding CGO, então o binário continua estático e cross-compilável para Windows).
+- **Flags `--ocr` e `--ocr-lang`** em `split-pdf` e `organize-pdf`: `--ocr` controla o modo (`auto`, `always` ou `never`; default `auto`) e `--ocr-lang` o idioma do OCR (default `por`). Persistidas nos perfis YAML como `ocr` e `ocr_lang`.
+- **Novo pacote `internal/ocr`:** wrapper do executável `tesseract`, com detecção automática (variável `TESSERACT_PATH`, PATH e, no Windows, os caminhos usuais de instalação) e aviso de instalação por sistema operacional quando ausente.
+- Em `organize-pdf`, a calibração interativa passa a usar o mesmo `TextOptions` do processamento real, garantindo que a regex calibrada veja o mesmo texto (nativo ou de OCR) que a execução vai processar.
+
+### Notas
+
+- Sem o Tesseract instalado, nada quebra: a execução segue normalmente com um aviso, sem OCR.
+- O OCR custa aproximadamente 1 segundo por página.
+- O reconhecimento de caracteres não é perfeito (ex: `ESCOLA` pode virar `ESCO`, `0` pode ser confundido com `O`) — regex sobre conteúdo que pode ter passado por OCR devem ser tolerantes a esse tipo de erro.
+
 ## [0.1.0] - 2026-08-11
 
 ### Adicionado

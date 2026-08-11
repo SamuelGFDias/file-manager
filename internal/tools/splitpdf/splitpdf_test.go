@@ -3,6 +3,8 @@ package splitpdf
 import (
 	"strings"
 	"testing"
+
+	"github.com/SamuelGFDias/file-manager/internal/pdfutil"
 )
 
 func TestMetaID(t *testing.T) {
@@ -53,6 +55,8 @@ func TestExpectedFlagsExist(t *testing.T) {
 		{"regex", ""},
 		{"name-template", ""},
 		{"overwrite", ""},
+		{"ocr", ""},
+		{"ocr-lang", ""},
 	}
 
 	for _, c := range cases {
@@ -74,6 +78,12 @@ func TestDefaultOptions(t *testing.T) {
 	}
 	if opts.NameTemplate != "pagina-%03d" {
 		t.Errorf("defaultOptions().NameTemplate = %q, want %q", opts.NameTemplate, "pagina-%03d")
+	}
+	if opts.OCR != "auto" {
+		t.Errorf("defaultOptions().OCR = %q, want %q", opts.OCR, "auto")
+	}
+	if opts.OCRLang != "por" {
+		t.Errorf("defaultOptions().OCRLang = %q, want %q", opts.OCRLang, "por")
 	}
 }
 
@@ -138,6 +148,55 @@ func TestRunRangeModeEmptyRangesErrors(t *testing.T) {
 
 	if _, err := tl.run(); err == nil {
 		t.Fatal("run() com Mode range e Ranges vazio deveria devolver erro")
+	}
+}
+
+func TestRunInvalidOCRModeErrors(t *testing.T) {
+	tl := New()
+	tl.opts = Options{
+		Input: "arquivo.pdf",
+		Mode:  "page",
+		OCR:   "xyz",
+	}
+
+	_, err := tl.run()
+	if err == nil {
+		t.Fatal("run() com OCR inválido deveria devolver erro")
+	}
+	if !strings.Contains(err.Error(), "auto") || !strings.Contains(err.Error(), "always") || !strings.Contains(err.Error(), "never") {
+		t.Errorf("erro %q deveria mencionar os valores válidos de OCR (auto, always, never)", err.Error())
+	}
+}
+
+func TestTextOptionsNeverHasNoEngine(t *testing.T) {
+	tl := New()
+	tl.opts = Options{OCR: "never", OCRLang: "por"}
+
+	text, err := tl.textOptions()
+	if err != nil {
+		t.Fatalf("textOptions() erro inesperado: %v", err)
+	}
+	if text.Mode != pdfutil.OCRNever {
+		t.Errorf("textOptions().Mode = %q, want %q", text.Mode, pdfutil.OCRNever)
+	}
+	if text.Engine != nil {
+		t.Errorf("textOptions().Engine = %v, want nil quando OCR = never", text.Engine)
+	}
+}
+
+func TestTextOptionsAutoHasEngine(t *testing.T) {
+	tl := New()
+	tl.opts = Options{OCR: "auto", OCRLang: "por"}
+
+	text, err := tl.textOptions()
+	if err != nil {
+		t.Fatalf("textOptions() erro inesperado: %v", err)
+	}
+	if text.Mode != pdfutil.OCRAuto {
+		t.Errorf("textOptions().Mode = %q, want %q", text.Mode, pdfutil.OCRAuto)
+	}
+	if text.Engine == nil {
+		t.Error("textOptions().Engine = nil, want não-nil quando OCR = auto")
 	}
 }
 

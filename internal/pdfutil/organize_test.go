@@ -1,7 +1,9 @@
 package pdfutil
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -250,5 +252,201 @@ func TestOrganizeSummary(t *testing.T) {
 	got = r.Summary()
 	if got != "[simulação] "+want {
 		t.Fatalf("Summary() em dry-run = %q, esperava prefixo [simulação] ", got)
+	}
+}
+
+// TestOrganizeZeroValueTextBehavesAsBefore confere que Organize com
+// OrganizeOptions.Text no zero-value (Mode: "", Engine: nil) se comporta
+// exatamente como o comportamento anterior à propagação de opções de OCR —
+// mesmo cenário de TestIntegrationOrganizeCopiesNonDestructively (definido em
+// integration_test.go, mesmo pacote de teste), agora com o campo Text
+// explícito no zero-value, confirmando o mesmo resultado.
+func TestOrganizeZeroValueTextBehavesAsBefore(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	srcPath := filepath.Join(inputDir, "documento.pdf")
+	if err := os.WriteFile(srcPath, buildTestPDF(t, []string{"Empresa: Acme\nNF: 00789"}), 0o644); err != nil {
+		t.Fatalf("escrever PDF de teste: %v", err)
+	}
+
+	result, err := Organize(context.Background(), OrganizeOptions{
+		InputDir:  inputDir,
+		OutputDir: outputDir,
+		Levels: []Level{
+			{Label: "empresa", Regex: regexp.MustCompile(`Empresa: (\w+)`)},
+		},
+		FilenameRegex: regexp.MustCompile(`NF:\s*(\d+)`),
+		Copy:          true,
+		Text:          TextOptions{}, // zero-value explícito
+	})
+	if err != nil {
+		t.Fatalf("Organize: %v", err)
+	}
+
+	if len(result.Organized) != 1 {
+		t.Fatalf("esperava 1 arquivo organizado, obteve %d (unclassified: %+v)", len(result.Organized), result.Unclassified)
+	}
+	wantDest := filepath.Join("Acme", "00789.pdf")
+	if result.Organized[0].Dest != wantDest {
+		t.Fatalf("Dest = %q, esperava %q", result.Organized[0].Dest, wantDest)
+	}
+
+	destAbs := filepath.Join(outputDir, wantDest)
+	if _, err := os.Stat(destAbs); err != nil {
+		t.Fatalf("arquivo de destino não foi criado em %q: %v", destAbs, err)
+	}
+	if _, err := os.Stat(srcPath); err != nil {
+		t.Fatalf("arquivo original deveria continuar em %q (Copy, não Move): %v", srcPath, err)
+	}
+}
+
+// --- PDF de teste com imagem embutida ---------------------------------------
+//
+// O motor de OCR falso usado abaixo (fakeOCREngine) já existe neste pacote de
+// teste, definido em textextract_test.go — reaproveitado aqui em vez de
+// redeclarado, para não colidir com aquele arquivo (que não deve ser
+// alterado). Ele conta chamadas a Available/ImageToText via counts(), o que
+// serve tanto para o pedido original ("provar que o fake foi de fato
+// chamado") quanto para as asserções abaixo.
+
+// imgPDFBuilder monta, byte a byte, um PDF válido mínimo com uma única página
+// contendo uma imagem raster embutida (sem filtro, escala de cinza 8bpc) —
+// necessária para exercitar o caminho de api.ExtractImagesFile usado pelo
+// fallback de OCR (applyOCRFallback, em textextract.go). É deliberadamente
+// separado do pdfBuilder de integration_test.go (que não gera imagens) para
+// não alterar aquele arquivo.
+type imgPDFBuilder struct {
+	buf     bytes.Buffer
+	offsets []int
+}
+
+func newImgPDFBuilder() *imgPDFBuilder {
+	b := &imgPDFBuilder{}
+	b.buf.WriteString("%PDF-1.4\n")
+	return b
+}
+
+func (b *imgPDFBuilder) reserveID() int {
+	id := len(b.offsets) + 1
+	b.offsets = append(b.offsets, -1)
+	return id
+}
+
+func (b *imgPDFBuilder) placeObj(id int, body string) {
+	b.offsets[id-1] = b.buf.Len()
+	fmt.Fprintf(&b.buf, "%d 0 obj\n%s\nendobj\n", id, body)
+}
+
+func (b *imgPDFBuilder) addObj(body string) int {
+	id := b.reserveID()
+	b.placeObj(id, body)
+	return id
+}
+
+// addRawStreamObj escreve um objeto stream sem filtro (dictExtra some às
+// entradas fixas do dicionário; content é o conteúdo cru do stream).
+func (b *imgPDFBuilder) addRawStreamObj(dictExtra string, content []byte) int {
+	id := len(b.offsets) + 1
+	b.offsets = append(b.offsets, b.buf.Len())
+	fmt.Fprintf(&b.buf, "%d 0 obj\n<< %s /Length %d >>\nstream\n", id, dictExtra, len(content))
+	b.buf.Write(content)
+	b.buf.WriteString("\nendstream\nendobj\n")
+	return id
+}
+
+func (b *imgPDFBuilder) finish(rootID int) []byte {
+	xrefOffset := b.buf.Len()
+	b.buf.WriteString("xref\n")
+	fmt.Fprintf(&b.buf, "0 %d\n", len(b.offsets)+1)
+	b.buf.WriteString("0000000000 65535 f \n")
+	for _, off := range b.offsets {
+		fmt.Fprintf(&b.buf, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&b.buf, "trailer\n<< /Size %d /Root %d 0 R >>\nstartxref\n%d\n%%%%EOF",
+		len(b.offsets)+1, rootID, xrefOffset)
+	return b.buf.Bytes()
+}
+
+// buildImagePDF gera um PDF de uma página com uma imagem raster 2x2 em escala
+// de cinza (sem camada de texto embutida útil) embutida via /XObject, para
+// que api.ExtractImagesFile (chamado por applyOCRFallback quando Mode !=
+// OCRNever) encontre algo para extrair.
+func buildImagePDF(t *testing.T) []byte {
+	t.Helper()
+	b := newImgPDFBuilder()
+
+	catalogID := b.reserveID()
+	pagesID := b.reserveID()
+
+	imgData := []byte{0x00, 0x40, 0x80, 0xFF}
+	imgID := b.addRawStreamObj("/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8", imgData)
+
+	contentID := b.addRawStreamObj("", []byte("q 50 0 0 50 10 10 cm /Im1 Do Q"))
+
+	pageID := b.reserveID()
+	b.placeObj(pageID, fmt.Sprintf(
+		"<< /Type /Page /Parent %d 0 R /Resources << /XObject << /Im1 %d 0 R >> >> /MediaBox [0 0 612 792] /Contents %d 0 R >>",
+		pagesID, imgID, contentID,
+	))
+
+	b.placeObj(pagesID, fmt.Sprintf("<< /Type /Pages /Kids [%d 0 R] /Count 1 >>", pageID))
+	b.placeObj(catalogID, fmt.Sprintf("<< /Type /Catalog /Pages %d 0 R >>", pagesID))
+
+	return b.finish(catalogID)
+}
+
+// TestOrganizeOCRAlwaysPropagatesFakeEngineTextToClassification é o teste de
+// ponta a ponta pedido: prova que OrganizeOptions.Text chega até
+// ExtractTextOpts (dentro de Organize) e que o texto devolvido pelo motor de
+// OCR configurado é, de fato, o texto usado por ResolveDestination para
+// classificar o arquivo. Sem a propagação feita em organize.go, opts.Text
+// nunca chegaria ao motor falso e este teste falharia (Organize cairia no
+// caminho "sem OCR" e o PDF, sem texto embutido, iria para
+// sem-classificacao).
+func TestOrganizeOCRAlwaysPropagatesFakeEngineTextToClassification(t *testing.T) {
+	ClearTextCache()
+	t.Cleanup(ClearTextCache)
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	srcPath := filepath.Join(inputDir, "digitalizado.pdf")
+	if err := os.WriteFile(srcPath, buildImagePDF(t), 0o644); err != nil {
+		t.Fatalf("escrever PDF de teste com imagem: %v", err)
+	}
+
+	fake := &fakeOCREngine{available: true, text: "FORNECEDOR: ACME\nNF: 00123"}
+
+	result, err := Organize(context.Background(), OrganizeOptions{
+		InputDir:  inputDir,
+		OutputDir: outputDir,
+		Levels: []Level{
+			{Label: "fornecedor", Regex: regexp.MustCompile(`FORNECEDOR: (\w+)`)},
+		},
+		FilenameRegex: regexp.MustCompile(`NF:\s*(\d+)`),
+		Copy:          true,
+		Text:          TextOptions{Mode: OCRAlways, Engine: fake},
+	})
+	if err != nil {
+		t.Fatalf("Organize: %v", err)
+	}
+
+	if _, imageToTextCalls := fake.counts(); imageToTextCalls == 0 {
+		t.Fatal("o motor de OCR falso nunca foi chamado; a extração de imagem pode ter falhado antes de acionar o OCR")
+	}
+
+	if len(result.Organized) != 1 {
+		t.Fatalf("esperava 1 arquivo organizado via texto do OCR falso, obteve %d organizados e %d não-classificados (%+v)",
+			len(result.Organized), len(result.Unclassified), result.Unclassified)
+	}
+	wantDest := filepath.Join("ACME", "00123.pdf")
+	if result.Organized[0].Dest != wantDest {
+		t.Fatalf("Dest = %q, esperava %q (classificado a partir do texto devolvido pelo motor falso)", result.Organized[0].Dest, wantDest)
+	}
+
+	destAbs := filepath.Join(outputDir, wantDest)
+	if _, err := os.Stat(destAbs); err != nil {
+		t.Fatalf("arquivo de destino não foi criado em %q: %v", destAbs, err)
 	}
 }

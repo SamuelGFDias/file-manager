@@ -30,6 +30,7 @@ type SplitOptions struct {
 	Regex        *regexp.Regexp // modo regex
 	NameTemplate string         // ex "pagina-%03d" (sem ".pdf": a extensão é acrescentada uma única vez ao montar o caminho final); usado quando não há captura
 	Overwrite    bool
+	Text         TextOptions // opções de extração de texto/OCR (usadas no modo regex); zero-value = sem OCR
 }
 
 // SplitResult descreve o resultado de uma operação de separação de PDF.
@@ -292,7 +293,7 @@ func Split(ctx context.Context, opts SplitOptions) (SplitResult, error) {
 			return SplitResult{}, fmt.Errorf("modo regex requer uma expressão regular")
 		}
 
-		pageTexts, err := ExtractPageTexts(opts.Input)
+		pageTexts, err := ExtractPageTextsOpts(ctx, opts.Input, opts.Text)
 		if err != nil {
 			return SplitResult{}, fmt.Errorf("extrair texto de %q: %w", opts.Input, err)
 		}

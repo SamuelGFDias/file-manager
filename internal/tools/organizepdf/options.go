@@ -55,14 +55,25 @@ type Options struct {
 	// Sample limita a simulação aos N primeiros arquivos (0 = todos). Assim
 	// como DryRun, nunca é persistido no perfil.
 	Sample int `yaml:"-"`
+	// OCR controla o uso de OCR como fallback quando um PDF não tem texto
+	// embutido: "auto" (só nas páginas sem texto), "always" ou "never".
+	// Ver pdfutil.ParseOCRMode.
+	OCR string `yaml:"ocr"`
+	// OCRLang é o idioma usado pelo motor de OCR (ex: "por", "eng"). Vazio
+	// é tratado como "por" na hora da execução.
+	OCRLang string `yaml:"ocr_lang"`
 }
 
 // defaultOptions devolve as Options padrão de organize-pdf: sem níveis
 // (modo "somente renomear" até que o usuário adicione algum), copiando
-// (não destrutivo) para "sem-classificacao" quando um arquivo não casa.
+// (não destrutivo) para "sem-classificacao" quando um arquivo não casa, e
+// OCR automático (só usado quando o PDF não tem texto embutido) em
+// português.
 func defaultOptions() Options {
 	return Options{
 		UnclassifiedDir: "sem-classificacao",
+		OCR:             "auto",
+		OCRLang:         "por",
 	}
 }
 

@@ -31,6 +31,13 @@ type Options struct {
 	// Overwrite indica se arquivos de saída já existentes devem ser
 	// sobrescritos.
 	Overwrite bool `yaml:"overwrite"`
+	// OCR controla o uso de OCR como fallback de extração de texto em PDFs
+	// digitalizados (sem camada de texto). Só tem efeito quando
+	// Mode == "regex". Valores aceitos: "auto", "always", "never".
+	OCR string `yaml:"ocr"`
+	// OCRLang é o idioma usado pelo OCR (ex: "por", "eng"). Vazio equivale a
+	// "por".
+	OCRLang string `yaml:"ocr_lang"`
 }
 
 // defaultOptions devolve as Options padrão da ferramenta split-pdf: modo
@@ -43,5 +50,7 @@ func defaultOptions() Options {
 	return Options{
 		Mode:         "page",
 		NameTemplate: "pagina-%03d",
+		OCR:          "auto",
+		OCRLang:      "por",
 	}
 }

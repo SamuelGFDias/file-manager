@@ -92,6 +92,7 @@ type OrganizeOptions struct {
 	DryRun          bool
 	Sample          int // 0 = todos; N>0 = só os N primeiros (ordem alfabética)
 	Overwrite       bool
+	Text            TextOptions // opções de extração de texto/OCR; zero-value = sem OCR
 }
 
 // OrganizeEntry descreve o destino calculado (ou tentado) para um único
@@ -207,7 +208,7 @@ func Organize(ctx context.Context, opts OrganizeOptions) (OrganizeResult, error)
 		var unmatched *Unmatched
 		var dest string
 
-		text, textErr := ExtractText(srcPath)
+		text, textErr := ExtractTextOpts(ctx, srcPath, opts.Text)
 		if textErr != nil {
 			unmatched = &Unmatched{Level: "texto", Pattern: "falha ao extrair texto"}
 		} else {

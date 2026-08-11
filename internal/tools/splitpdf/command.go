@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
+	"github.com/SamuelGFDias/file-manager/internal/ocr"
 	"github.com/SamuelGFDias/file-manager/internal/pdfutil"
 	"github.com/SamuelGFDias/file-manager/internal/tool"
 	"github.com/SamuelGFDias/file-manager/internal/ui"
@@ -199,6 +200,62 @@ func (t *Tool) params() []tool.Param {
 			},
 			Prompt: nil,
 		},
+		{
+			Name:        "ocr",
+			Shorthand:   "",
+			Type:        "string",
+			Description: "Uso de OCR em PDFs sem texto (só afeta --mode regex): auto, always ou never",
+			Default:     "auto",
+			Example:     "always",
+			BindFlag: func(fs *pflag.FlagSet) {
+				fs.StringVar(&t.opts.OCR, "ocr", t.opts.OCR, "Uso de OCR em PDFs sem texto (só afeta --mode regex): auto, always ou never")
+			},
+			Prompt: func() error {
+				if t.opts.Mode != "regex" {
+					return nil
+				}
+				if !ocr.NewTesseract().Available() {
+					t.opts.OCR = "never"
+					return nil
+				}
+
+				ocrOptions := []string{"Automático (recomendado)", "Sempre", "Nunca"}
+				ocrValues := map[string]string{
+					"Automático (recomendado)": "auto",
+					"Sempre":                   "always",
+					"Nunca":                    "never",
+				}
+				def := "Automático (recomendado)"
+				for label, value := range ocrValues {
+					if value == t.opts.OCR {
+						def = label
+						break
+					}
+				}
+				selected := ""
+				if err := survey.AskOne(&survey.Select{
+					Message: "Usar OCR em páginas sem texto?",
+					Options: ocrOptions,
+					Default: def,
+				}, &selected); err != nil {
+					return err
+				}
+				t.opts.OCR = ocrValues[selected]
+				return nil
+			},
+		},
+		{
+			Name:        "ocr-lang",
+			Shorthand:   "",
+			Type:        "string",
+			Description: "Idioma do OCR (ex: por, eng)",
+			Default:     "por",
+			Example:     "eng",
+			BindFlag: func(fs *pflag.FlagSet) {
+				fs.StringVar(&t.opts.OCRLang, "ocr-lang", t.opts.OCRLang, "Idioma do OCR (ex: por, eng)")
+			},
+			Prompt: nil,
+		},
 	}
 }
 
@@ -230,6 +287,57 @@ func (t *Tool) Command() *cobra.Command {
 	return cmd
 }
 
+// textOptions converte t.opts.OCR/t.opts.OCRLang em pdfutil.TextOptions,
+// mantendo um único ponto de verdade sobre como essa conversão acontece
+// (usado tanto por run() quanto pelos testes). O motor de OCR só é
+// preenchido quando o modo resolvido não é "never", para não pagar o custo
+// de detectar o binário do tesseract à toa.
+func (t *Tool) textOptions() (pdfutil.TextOptions, error) {
+	mode, err := pdfutil.ParseOCRMode(t.opts.OCR)
+	if err != nil {
+		return pdfutil.TextOptions{}, err
+	}
+
+	lang := t.opts.OCRLang
+	if lang == "" {
+		lang = "por"
+	}
+
+	text := pdfutil.TextOptions{
+		Mode: mode,
+		Lang: lang,
+	}
+	if mode != pdfutil.OCRNever {
+		text.Engine = ocr.NewTesseract()
+	}
+
+	return text, nil
+}
+
+// ocrWarning devolve um aviso em português para incluir em Result.Details
+// quando o OCR foi solicitado (modo regex, --ocr auto/always) mas algo pode
+// prejudicar o resultado: tesseract ausente (a regex simplesmente não vai
+// achar match em PDFs digitalizados, e sem esse aviso o usuário não teria
+// como saber por quê) ou o idioma configurado não estar instalado (o OCR
+// roda, mas com baixa precisão). Devolve "" quando não há nada a avisar.
+func (t *Tool) ocrWarning(mode pdfutil.SplitMode, text pdfutil.TextOptions) string {
+	if mode != pdfutil.SplitByRegex {
+		return ""
+	}
+	if text.Mode != pdfutil.OCRAuto && text.Mode != pdfutil.OCRAlways {
+		return ""
+	}
+
+	engine := ocr.NewTesseract()
+	if !engine.Available() {
+		return fmt.Sprintf("aviso: tesseract não está instalado; PDFs digitalizados (sem texto embutido) não serão lidos pelo modo regex. %s", ocr.InstallHint())
+	}
+	if !engine.HasLanguage(text.Lang) {
+		return fmt.Sprintf("aviso: o pacote de idioma de OCR %q não está instalado; o reconhecimento de texto pode ter baixa precisão.", text.Lang)
+	}
+	return ""
+}
+
 // run executa a separação do PDF de acordo com t.opts e devolve o
 // resultado.
 func (t *Tool) run() (tool.Result, error) {
@@ -249,12 +357,18 @@ func (t *Tool) run() (tool.Result, error) {
 		return tool.Result{}, fmt.Errorf("modo de separação inválido: %q (valores válidos: page, range, regex)", t.opts.Mode)
 	}
 
+	text, err := t.textOptions()
+	if err != nil {
+		return tool.Result{}, err
+	}
+
 	opts := pdfutil.SplitOptions{
 		Input:        t.opts.Input,
 		OutputDir:    t.opts.OutputDir,
 		Mode:         mode,
 		NameTemplate: t.opts.NameTemplate,
 		Overwrite:    t.opts.Overwrite,
+		Text:         text,
 	}
 
 	switch mode {
@@ -289,10 +403,13 @@ func (t *Tool) run() (tool.Result, error) {
 		outDir = filepath.Dir(t.opts.Input)
 	}
 
-	details := make([]string, 0, len(result.Outputs)+len(result.Warnings))
+	details := make([]string, 0, len(result.Outputs)+len(result.Warnings)+1)
 	details = append(details, result.Outputs...)
 	for _, w := range result.Warnings {
 		details = append(details, "aviso: "+w)
+	}
+	if warning := t.ocrWarning(mode, text); warning != "" {
+		details = append(details, warning)
 	}
 
 	return tool.Result{

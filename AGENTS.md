@@ -24,7 +24,8 @@ internal/ui/mainmenu/             Menu principal
 internal/ui/docs/                 Exportação de documentação (context e skill)
 internal/tool/                    Contrato Tool/Param/Doc
 internal/config/                  Gerenciamento de perfis YAML (paths, validação, I/O)
-internal/pdfutil/                 Núcleo: merge, split, organize, extração de texto
+internal/pdfutil/                 Núcleo: merge, split, organize, extração de texto (com fallback OCR)
+internal/ocr/                     Wrapper do executável externo tesseract (não é binding CGO)
 internal/regexcalib/              Sugestão de regex a partir de valor de exemplo
 internal/tools/                   Uma subpasta por ferramenta (mergepdf/, splitpdf/, organizepdf/)
 ```
@@ -120,13 +121,17 @@ Nomes derivados de captura de regex (ex: `{{.Match}}` em split-pdf) passam por `
 
 Defesa contra PDF malicioso escrever fora do diretório de destino.
 
-### 7. Limitação Conhecida: Sem OCR
+### 7. OCR como Fallback de Extração de Texto
 
-A extração de texto (`pdfutil.ExtractText()`) só funciona em PDFs com camada de texto. PDFs digitalizados (imagem pura) devolvem texto vazio; nenhuma regex casa.
+A extração de texto (`pdfutil.ExtractText()` / `ExtractPageTextsOpts()`) usa `ledongthuc/pdf` para PDFs com camada de texto. PDFs digitalizados (imagem pura) devolvem texto vazio nesse caminho — mas a página já é uma imagem embutida, então o pdfcpu a extrai e o `internal/ocr.Tesseract` a lê. Não é preciso rasterizador.
 
-Ferramentas que dependem de regex sobre conteúdo (`split-pdf --mode regex`, `organize-pdf --level <regex>`) não funcionam em PDFs digitalizados.
+Controlado por `pdfutil.OCRMode` (`auto`/`always`/`never`) dentro de `pdfutil.TextOptions`, exposto em `split-pdf` e `organize-pdf` pelas flags `--ocr` (default `auto`) e `--ocr-lang` (default `por`), persistidas no perfil YAML como `ocr` e `ocr_lang`. `auto` só aciona o OCR quando a página não tem texto embutido.
 
-Aviso explícito ao usuário quando isso acontece.
+Texto extraído por OCR é cacheado por arquivo (`ParseExtractedImageName` mapeia a imagem extraída de volta à página) — o OCR custa ~1s por página, então repetir a extração para a mesma página seria caro.
+
+Sem o Tesseract instalado, nada quebra: a execução segue normalmente e emite um aviso com `ocr.InstallHint()` (instrução de instalação por sistema operacional).
+
+**O OCR erra caracteres** (observado: `ESCOLA` → `ESCO`, confusão entre `0` e `O`). Regex sobre conteúdo potencialmente vindo de OCR devem ser tolerantes a esse tipo de erro, não exigir casamento exato.
 
 ### 8. Registro de Ferramenta Nova
 
@@ -144,6 +149,14 @@ func Tools() []tool.Tool {
 ```
 
 Isso é decisão deliberada: editar Go existente por parsing automático é frágil. O ganho não compensa o risco.
+
+### 9. OCR via Processo Externo, não CGO
+
+`internal/ocr` invoca o executável `tesseract` via `os/exec` em vez de usar um binding CGO (ex: `gosseract`). Motivo: um binding CGO exigiria `CGO_ENABLED=1` e a libtesseract instalada no ambiente de build, o que quebraria a distribuição atual — binário único, estático, cross-compilado de Linux para Windows sem toolchain C. Com processo externo, o binário Go continua exatamente como antes; o Tesseract é uma dependência de runtime opcional, não de build.
+
+### 10. Calibração e Processamento Compartilham `TextOptions`
+
+Em `organize-pdf`, a tela de calibração interativa (que sugere regex a partir de um exemplo) e o processamento real usam o mesmo `pdfutil.TextOptions` — mesmo modo de OCR, mesmo idioma. Sem isso, o usuário calibraria a regex contra um texto (ex: extração nativa) e a execução real veria outro (ex: texto de OCR), e a regex calibrada poderia não casar. Mesmo princípio da Decisão 4 (dry-run compartilhado): não há dois caminhos que possam divergir silenciosamente.
 
 ## Fluxo para Adicionar Uma Ferramenta Nova
 

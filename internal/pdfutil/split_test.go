@@ -1,6 +1,9 @@
 package pdfutil
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -238,5 +241,39 @@ func TestGroupPagesByRegexEmptyCaptureFallsBackToTemplate(t *testing.T) {
 	}
 	if got[0].Name != "documento-001" {
 		t.Fatalf("captura vazia deveria cair no template, obteve %q", got[0].Name)
+	}
+}
+
+// TestSplitRegexModeWithExplicitOCRNeverBehavesAsBefore prova que passar
+// Text: TextOptions{Mode: OCRNever} explicitamente no modo regex produz
+// exatamente o mesmo resultado que o comportamento anterior à propagação de
+// opções de OCR (equivalente ao zero-value de Text). Usa buildTestPDF, do
+// mesmo pacote de teste (definido em integration_test.go), para gerar um PDF
+// real com texto embutido.
+func TestSplitRegexModeWithExplicitOCRNeverBehavesAsBefore(t *testing.T) {
+	dir := t.TempDir()
+	input := writeTestPDF(t, dir, "notas.pdf", []string{"NF: 00123", "conteudo da nota"})
+	outDir := filepath.Join(dir, "saida")
+
+	result, err := Split(context.Background(), SplitOptions{
+		Input:     input,
+		OutputDir: outDir,
+		Mode:      SplitByRegex,
+		Regex:     regexp.MustCompile(`NF:\s*(\d+)`),
+		Text:      TextOptions{Mode: OCRNever},
+	})
+	if err != nil {
+		t.Fatalf("Split (regex, Text OCRNever explícito): %v", err)
+	}
+
+	if len(result.Outputs) != 1 {
+		t.Fatalf("gerou %d arquivos, esperava 1: %v", len(result.Outputs), result.Outputs)
+	}
+	gotName := filepath.Base(result.Outputs[0])
+	if gotName != "00123.pdf" {
+		t.Fatalf("nome do arquivo gerado = %q, esperava %q", gotName, "00123.pdf")
+	}
+	if _, err := os.Stat(result.Outputs[0]); err != nil {
+		t.Fatalf("arquivo de saída não foi criado: %v", err)
 	}
 }

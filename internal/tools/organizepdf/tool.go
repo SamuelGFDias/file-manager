@@ -62,6 +62,10 @@ func (t *Tool) Doc() tool.Doc {
 			"nomear o próprio arquivo; vazio mantém o nome original.\n\n" +
 			"O padrão é COPIAR os arquivos (--move não informado): os originais em --input nunca são " +
 			"tocados. Use --move para mover de fato, esvaziando a pasta de origem à medida que organiza.\n\n" +
+			"PDFs digitalizados (sem camada de texto) passam por OCR via Tesseract quando --ocr é \"auto\" " +
+			"(padrão, só nas páginas sem texto) ou \"always\" (força OCR em todas as páginas). --ocr never " +
+			"desliga o OCR por completo. Sem o Tesseract instalado, o comportamento é o mesmo de --ocr " +
+			"never: esses arquivos continuam sem texto e caem em --unclassified-dir.\n\n" +
 			"Um arquivo cujo texto não casa com algum nível (ou com --filename-regex) NUNCA é perdido nem " +
 			"interrompe o lote: ele é copiado/movido para a subpasta --unclassified-dir dentro de --output, " +
 			"e o motivo exato da falha (qual nível, ou o nome do arquivo) é reportado no resultado.",
@@ -92,6 +96,11 @@ func (t *Tool) Doc() tool.Doc {
 				Command: `file-manager organize-pdf --input ./notas --output ./organizado ` +
 					`--level "fornecedor=FORNECEDOR:\s*(\w+)" --move --overwrite`,
 			},
+			{
+				Title: "Organizar uma pasta com notas fiscais digitalizadas (sem camada de texto), forçando OCR em inglês",
+				Command: `file-manager organize-pdf --input ./notas-escaneadas --output ./organizado ` +
+					`--level "fornecedor=SUPPLIER:\s*(\w+)" --ocr always --ocr-lang eng`,
+			},
 		},
 		ProfileSchema: `input_dir: ./notas
 output_dir: ./organizado
@@ -103,9 +112,13 @@ levels:
 filename_regex: 'NF:\s*(\d+)'
 move: false
 unclassified_dir: sem-classificacao
-overwrite: false`,
+overwrite: false
+ocr: auto
+ocr_lang: por`,
 		Notes: []string{
-			"Esta ferramenta NÃO faz OCR: um PDF digitalizado (imagem sem camada de texto) não tem texto para casar com nenhuma regex, e cai em --unclassified-dir com o motivo \"falha ao extrair texto\".",
+			"PDFs digitalizados (imagem sem camada de texto) passam por OCR via Tesseract quando --ocr é \"auto\" (padrão, aplica OCR só nas páginas sem texto embutido) ou \"always\" (força OCR em todas as páginas, ignorando texto embutido); --ocr never desliga o OCR. Sem o Tesseract instalado no sistema, esses PDFs continuam sem texto para casar com qualquer regex e caem em --unclassified-dir, mesmo com --ocr auto ou always.",
+			"OCR é sensivelmente mais lento que a extração de texto embutido (da ordem de ~1s por página) e pode errar caracteres (ex: confundir \"0\" com \"O\"), então regex calibradas contra texto de OCR costumam se beneficiar de padrões mais tolerantes do que as calibradas contra texto embutido limpo.",
+			"O idioma padrão do OCR é \"por\" (--ocr-lang); ele exige o pacote de idioma português do Tesseract instalado — sem ele, o reconhecimento cai no idioma padrão do Tesseract e a precisão tende a cair bastante.",
 			"Recomenda-se sempre testar com --dry-run antes de aplicar de verdade, especialmente ao calibrar uma regex nova — o modo interativo já inclui esse teste como etapa obrigatória antes de aplicar.",
 			"Nomes de pasta e de arquivo derivados de um grupo de captura são sanitizados: separadores de caminho, sequências \"..\", caracteres inválidos em nomes de arquivo no Windows e caracteres de controle são substituídos por \"_\".",
 			"dry_run e sample nunca são persistidos num perfil salvo: são sempre decididos na hora da execução, nunca fazem parte da configuração salva.",

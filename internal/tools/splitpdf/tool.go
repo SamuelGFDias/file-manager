@@ -51,12 +51,15 @@ func (t *Tool) Doc() tool.Doc {
 			"fazendo parte desse mesmo documento até que a próxima página com match apareça (ou até o fim " +
 			"do PDF). O nome do arquivo de saída vem do primeiro grupo de captura da regex quando ele " +
 			"existe (ex: \"NF:\\s*(\\d+)\" nomeia os arquivos pelo número da nota fiscal); quando não há " +
-			"captura, ou ela vem vazia, o nome é gerado a partir de --name-template.",
+			"captura, ou ela vem vazia, o nome é gerado a partir de --name-template. No modo regex, páginas " +
+			"sem texto embutido (PDFs digitalizados) passam por OCR via Tesseract, controlado por --ocr " +
+			"e --ocr-lang.",
 		WhenToUse: []string{
 			"quando o usuário pedir para separar, dividir ou quebrar um PDF em vários arquivos",
 			"quando o usuário quiser um PDF por página",
 			"quando o usuário quiser extrair intervalos específicos de páginas de um PDF em arquivos separados",
 			"quando o usuário tiver um PDF com vários documentos concatenados (ex: notas fiscais digitalizadas com texto) e quiser separar um por documento, usando um marcador de texto que se repete no início de cada documento",
+			"quando o PDF concatenado for digitalizado (imagem sem camada de texto) e precisar de OCR para que a regex encontre o marcador de cada documento",
 		},
 		Flags: tool.DocFlags(t.params()),
 		Examples: []tool.ExampleDoc{
@@ -72,6 +75,10 @@ func (t *Tool) Doc() tool.Doc {
 				Title:   "Separar um PDF com várias notas fiscais concatenadas, uma por número de nota",
 				Command: `file-manager split-pdf --input notas.pdf --mode regex --regex 'NF:\s*(\d+)' --output-dir ./notas-separadas`,
 			},
+			{
+				Title:   "Separar um PDF digitalizado (sem texto embutido) forçando OCR em todas as páginas",
+				Command: `file-manager split-pdf --input notas-escaneadas.pdf --mode regex --regex 'NF:\s*(\d+)' --ocr always --ocr-lang por`,
+			},
 		},
 		ProfileSchema: "input: documento.pdf\n" +
 			"output_dir: \"\"\n" +
@@ -79,9 +86,13 @@ func (t *Tool) Doc() tool.Doc {
 			"ranges: \"\"\n" +
 			"regex: \"\"\n" +
 			"name_template: pagina-%03d\n" +
-			"overwrite: false\n",
+			"overwrite: false\n" +
+			"ocr: auto\n" +
+			"ocr_lang: por\n",
 		Notes: []string{
-			"Esta ferramenta NÃO faz OCR: um PDF digitalizado (imagem sem camada de texto) não tem texto para casar com nenhuma regex, e o modo regex avisa disso nos Warnings quando detecta páginas sem texto.",
+			"No modo regex, páginas de PDFs digitalizados (sem camada de texto embutida) passam por OCR quando o Tesseract está instalado no sistema (padrão --ocr auto: OCR só nas páginas sem texto; --ocr always força OCR em todas; --ocr never desativa). Sem o Tesseract instalado, essas páginas continuam sem texto e a regex simplesmente não encontra match nelas — a ferramenta avisa disso nos Details da execução.",
+			"O OCR custa cerca de 1s por página e pode errar caracteres reconhecidos; ao usar --mode regex sobre PDFs digitalizados, prefira expressões regulares mais tolerantes a esse tipo de erro.",
+			"O idioma do OCR (--ocr-lang) é \"por\" por padrão e exige o pacote de idioma correspondente instalado no Tesseract; sem ele o reconhecimento roda com baixa precisão.",
 			"Nomes de arquivo derivados de um grupo de captura da regex são sanitizados: separadores de caminho, sequências \"..\", caracteres inválidos em nomes de arquivo no Windows e caracteres de controle são substituídos por \"_\".",
 			"Sem --overwrite, a operação falha se algum arquivo de saída já existir, em vez de sobrescrevê-lo silenciosamente.",
 		},
