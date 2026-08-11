@@ -6,6 +6,7 @@ package app
 import (
 	"github.com/SamuelGFDias/file-manager/internal/tool"
 	"github.com/SamuelGFDias/file-manager/internal/tools/mergepdf"
+	"github.com/SamuelGFDias/file-manager/internal/tools/ocrpdf"
 	"github.com/SamuelGFDias/file-manager/internal/tools/organizepdf"
 	"github.com/SamuelGFDias/file-manager/internal/tools/splitpdf"
 )
@@ -23,5 +24,6 @@ func Tools() []tool.Tool {
 		mergepdf.New(),
 		splitpdf.New(),
 		organizepdf.New(),
+		ocrpdf.New(),
 	}
 }

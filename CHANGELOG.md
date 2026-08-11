@@ -18,6 +18,17 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.11.0] - 2026-08-11
+
+### Adicionado
+
+- **Nova ferramenta `ocr-pdf`: transforma PDFs digitalizados em PDFs pesquisáveis de verdade.** Até aqui o reconhecimento de texto (Decisão 7 do AGENTS.md) só servia para leitura: o texto reconhecido ficava em memória, usado uma única vez para casar uma regex em `organize-pdf`/`split-pdf`, e o arquivo continuava sendo imagem — não pesquisável no Explorer do Windows nem em leitor de PDF, e cada execução reprocessava tudo do zero. `ocr-pdf` grava a camada de texto de volta no arquivo (`tesseract <imagem> <saida> -l <lang> pdf`), gerando um arquivo novo com sufixo (`--suffix`, default `-ocr`) — o original nunca é sobrescrito. Aceita arquivos avulsos ou pastas inteiras (`--input`, repetível, com a mesma semântica de `--max-depth` já usada por `merge-pdf`).
+- **Regra de elegibilidade deliberadamente conservadora.** A abordagem reconstrói o PDF de saída a partir das imagens extraídas de cada página, o que é fiel quando a página é puro scan (uma única imagem, sem texto embutido) e destrutivo quando não é (imagem + texto, vetores, ou mais de uma imagem). Por isso `ocr-pdf` só processa arquivos cujas páginas sejam TODAS puro scan, recusando os demais com um motivo explícito — inclusive um arquivo que já tem texto embutido em todas as páginas (recusado por economia, não por erro: não há o que reconhecer). Perder conteúdo em silêncio seria muito pior que recusar o arquivo.
+- **`--dry-run` classifica tudo sem gerar nada** — mostra quantos arquivos são elegíveis e quantos seriam pulados (e por quê) antes de comprometer minutos de processamento (~0,9s por página medido na prática; um lote de 200 documentos de 3 páginas leva quase 10 minutos). O progresso é impresso arquivo a arquivo (`[3/200] nota-003.pdf — 3 página(s)...`), e o processo é interrompível com Ctrl+C sem deixar lixo temporário.
+- `--overwrite`/`--skip-existing` controlam o comportamento quando o destino já existe (o segundo pensado para retomar um lote grande interrompido no meio); `--report` grava um relatório CSV desta execução, no mesmo formato (BOM UTF-8, `sim`/`nao`) já usado por `organize-pdf --report` desde a v0.6.0.
+- Exige o Tesseract instalado no sistema — ao contrário do OCR opcional de `organize-pdf`/`split-pdf` (que degrada normalmente sem ele), aqui é o próprio propósito da ferramenta: sem o Tesseract, `ocr-pdf` recusa rodar com um erro claro, mesmo em `--dry-run`.
+- Custo de tamanho observado: um arquivo de 128 KB virou 241 KB — o Tesseract reescreve a imagem ao montar o PDF pesquisável, então o resultado é sempre maior que o original.
+
 ## [0.10.0] - 2026-08-11
 
 ### Adicionado

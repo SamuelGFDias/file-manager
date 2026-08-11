@@ -7,6 +7,7 @@ import (
 	"io"
 	"path/filepath"
 	"sort"
+	"strconv"
 )
 
 // ReportRow é uma linha do relatório de uma execução de Organize: uma
@@ -148,6 +149,45 @@ func WriteReportCSV(w io.Writer, rows []ReportRow) error {
 			classificado = "sim"
 		}
 		if err := cw.Write([]string{r.Arquivo, r.Origem, r.Destino, classificado, r.Motivo}); err != nil {
+			return fmt.Errorf("escrever linha do relatório CSV (%s): %w", r.Arquivo, err)
+		}
+	}
+
+	cw.Flush()
+	if err := cw.Error(); err != nil {
+		return fmt.Errorf("gravar relatório CSV: %w", err)
+	}
+	return nil
+}
+
+// ocrizeReportCSVHeader é o cabeçalho, em português, do CSV gerado por
+// WriteOCRizeReportCSV — colunas próprias de ocr-pdf (Decisão do relatório
+// de organize-pdf reaproveitada, mas com "processado" e "paginas" no lugar
+// de "classificado").
+var ocrizeReportCSVHeader = []string{"arquivo", "origem", "destino", "processado", "paginas", "motivo"}
+
+// WriteOCRizeReportCSV grava rows (o relatório de uma execução de ocr-pdf,
+// ver pdfutil.BuildOCRizeReport) em w como CSV, com o mesmo BOM UTF-8
+// (csvUTF8BOM) e a mesma convenção "sim"/"nao" de WriteReportCSV — reusa a
+// constante em vez de duplicar o literal, pelo mesmo motivo documentado ali
+// (Excel em português só reconhece UTF-8 com BOM).
+func WriteOCRizeReportCSV(w io.Writer, rows []OCRizeReportRow) error {
+	if _, err := io.WriteString(w, csvUTF8BOM); err != nil {
+		return fmt.Errorf("escrever BOM do relatório CSV: %w", err)
+	}
+
+	cw := csv.NewWriter(w)
+
+	if err := cw.Write(ocrizeReportCSVHeader); err != nil {
+		return fmt.Errorf("escrever cabeçalho do relatório CSV: %w", err)
+	}
+
+	for _, r := range rows {
+		processado := "nao"
+		if r.Processado {
+			processado = "sim"
+		}
+		if err := cw.Write([]string{r.Arquivo, r.Origem, r.Destino, processado, strconv.Itoa(r.Paginas), r.Motivo}); err != nil {
 			return fmt.Errorf("escrever linha do relatório CSV (%s): %w", r.Arquivo, err)
 		}
 	}

@@ -15,11 +15,11 @@ import (
 func TestTools(t *testing.T) {
 	tools := Tools()
 
-	if len(tools) != 3 {
-		t.Fatalf("Tools() devolveu %d ferramentas, esperava 3", len(tools))
+	if len(tools) != 4 {
+		t.Fatalf("Tools() devolveu %d ferramentas, esperava 4", len(tools))
 	}
 
-	wantIDs := []string{"merge-pdf", "split-pdf", "organize-pdf"}
+	wantIDs := []string{"merge-pdf", "split-pdf", "organize-pdf", "ocr-pdf"}
 	gotIDs := make([]string, len(tools))
 	for i, tl := range tools {
 		gotIDs[i] = tl.Meta().ID

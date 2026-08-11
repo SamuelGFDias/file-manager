@@ -113,6 +113,39 @@ func (t *Tesseract) ImageToText(ctx context.Context, imagePath, lang string) (st
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+// ImageToSearchablePDF roda o OCR sobre um arquivo de imagem e grava, em
+// "<outBase>.pdf", um PDF de uma página com a imagem original e uma camada
+// de texto invisível sobreposta (o que o tesseract chama de configfile
+// "pdf") — diferente de ImageToText, que só devolve o texto reconhecido
+// como string, sem gerar arquivo nenhum. lang vazio usa "por".
+//
+// Medido na prática (ver AGENTS.md, decisão de ocr-pdf): ~0,9s por página, e
+// o arquivo gerado costuma ficar bem maior que a imagem de origem — o
+// tesseract reescreve a imagem ao montar o PDF.
+func (t *Tesseract) ImageToSearchablePDF(ctx context.Context, imagePath, outBase, lang string) error {
+	if !t.Available() {
+		return ErrNotInstalled
+	}
+	if lang == "" {
+		lang = "por"
+	}
+
+	cmd := exec.CommandContext(ctx, t.BinPath, imagePath, outBase, "-l", lang, "pdf")
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return fmt.Errorf("ocr: tesseract falhou ao gerar PDF pesquisável: %w: %s", err, msg)
+		}
+		return fmt.Errorf("ocr: tesseract falhou ao gerar PDF pesquisável: %w", err)
+	}
+
+	return nil
+}
+
 // Languages lista os idiomas instalados (ex: ["eng","por"]). O resultado é
 // cacheado após a primeira chamada bem-sucedida ou malsucedida, evitando
 // disparar um processo externo a cada consulta.

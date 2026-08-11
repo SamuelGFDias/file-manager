@@ -40,6 +40,17 @@ func TestImageToTextErrNotInstalled(t *testing.T) {
 	}
 }
 
+func TestImageToSearchablePDFErrNotInstalled(t *testing.T) {
+	tess := &Tesseract{}
+	err := tess.ImageToSearchablePDF(context.Background(), "qualquer.png", "qualquer-saida", "por")
+	if err == nil {
+		t.Fatal("esperava erro quando BinPath está vazio")
+	}
+	if !errors.Is(err, ErrNotInstalled) {
+		t.Errorf("esperava errors.Is(err, ErrNotInstalled), obtive: %v", err)
+	}
+}
+
 func TestHasLanguageFalseWhenUnavailable(t *testing.T) {
 	tess := &Tesseract{}
 	if tess.HasLanguage("por") {
@@ -128,6 +139,53 @@ func TestImageToText(t *testing.T) {
 	_, err := tess.ImageToText(ctx, imgPath, "por")
 	if err != nil {
 		t.Fatalf("ImageToText() falhou sobre uma imagem válida: %v", err)
+	}
+}
+
+// TestImageToSearchablePDF roda ImageToSearchablePDF sobre uma imagem PNG
+// gerada em tempo de teste e confere que o arquivo "<outBase>.pdf" foi
+// criado e não está vazio — prova de viabilidade da abordagem usada por
+// ocr-pdf (ver internal/pdfutil/ocrize.go): o mesmo comando que o CLI
+// dispara de verdade, "tesseract <imagem> <saida> -l <lang> pdf".
+func TestImageToSearchablePDF(t *testing.T) {
+	tess := NewTesseract()
+	if !tess.Available() {
+		t.Skip("tesseract não instalado")
+	}
+
+	imgPath := generateTestImage(t)
+	outBase := filepath.Join(filepath.Dir(imgPath), "saida")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := tess.ImageToSearchablePDF(ctx, imgPath, outBase, "por"); err != nil {
+		t.Fatalf("ImageToSearchablePDF() falhou sobre uma imagem válida: %v", err)
+	}
+
+	info, err := os.Stat(outBase + ".pdf")
+	if err != nil {
+		t.Fatalf("PDF pesquisável não foi criado em %q: %v", outBase+".pdf", err)
+	}
+	if info.Size() == 0 {
+		t.Error("PDF pesquisável gerado está vazio")
+	}
+}
+
+func TestImageToSearchablePDFCanceledContext(t *testing.T) {
+	tess := NewTesseract()
+	if !tess.Available() {
+		t.Skip("tesseract não instalado")
+	}
+
+	imgPath := generateTestImage(t)
+	outBase := filepath.Join(filepath.Dir(imgPath), "saida")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // já cancelado antes de rodar
+
+	if err := tess.ImageToSearchablePDF(ctx, imgPath, outBase, "por"); err == nil {
+		t.Fatal("esperava erro com contexto já cancelado")
 	}
 }
 
