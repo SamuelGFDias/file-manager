@@ -74,29 +74,38 @@ type textCacheKey struct {
 	lang    string
 }
 
+// textCacheEntry guarda, junto do texto extraído, os avisos gerados durante
+// a extração (ex: imagem cujo nome não pôde ser associada a uma página) —
+// para que uma segunda chamada servida pelo cache continue reportando os
+// mesmos avisos da primeira, em vez de silenciá-los.
+type textCacheEntry struct {
+	texts    []string
+	warnings []string
+}
+
 var (
 	textCacheMu sync.RWMutex
-	textCache   = map[textCacheKey][]string{}
+	textCache   = map[textCacheKey]textCacheEntry{}
 )
 
 // ClearTextCache limpa o cache de textos extraídos (usado em teste).
 func ClearTextCache() {
 	textCacheMu.Lock()
 	defer textCacheMu.Unlock()
-	textCache = map[textCacheKey][]string{}
+	textCache = map[textCacheKey]textCacheEntry{}
 }
 
-func cacheGet(key textCacheKey) ([]string, bool) {
+func cacheGet(key textCacheKey) (textCacheEntry, bool) {
 	textCacheMu.RLock()
 	defer textCacheMu.RUnlock()
 	v, ok := textCache[key]
 	return v, ok
 }
 
-func cacheSet(key textCacheKey, texts []string) {
+func cacheSet(key textCacheKey, entry textCacheEntry) {
 	textCacheMu.Lock()
 	defer textCacheMu.Unlock()
-	textCache[key] = texts
+	textCache[key] = entry
 }
 
 // --- extração de texto embutido ---------------------------------------------
@@ -139,7 +148,8 @@ func extractEmbeddedPageTexts(path string) ([]string, error) {
 // Mantida por compatibilidade: delega para ExtractPageTextsOpts com
 // Mode: OCRNever, ou seja, comportamento idêntico ao anterior (sem OCR).
 func ExtractPageTexts(path string) ([]string, error) {
-	return ExtractPageTextsOpts(context.Background(), path, TextOptions{Mode: OCRNever})
+	texts, _, err := ExtractPageTextsOpts(context.Background(), path, TextOptions{Mode: OCRNever})
+	return texts, err
 }
 
 // ExtractText devolve o texto do documento inteiro em path, com o texto de
@@ -148,19 +158,28 @@ func ExtractPageTexts(path string) ([]string, error) {
 // Mantida por compatibilidade: delega para ExtractTextOpts com
 // Mode: OCRNever, ou seja, comportamento idêntico ao anterior (sem OCR).
 func ExtractText(path string) (string, error) {
-	return ExtractTextOpts(context.Background(), path, TextOptions{Mode: OCRNever})
+	text, _, err := ExtractTextOpts(context.Background(), path, TextOptions{Mode: OCRNever})
+	return text, err
 }
 
 // extractedImageNamePattern casa nomes gerados pelo pdfcpu no formato
-// "<baseDoPDF>_<pagina>_Im<indice>.<ext>". O nome base do PDF pode ele
-// próprio conter "_" e dígitos (ex.: "nota_2024_01.pdf"), então o ".*"
+// "<baseDoPDF>_<pagina>_<prefixo><indice>.<ext>". O nome base do PDF pode
+// ele próprio conter "_" e dígitos (ex.: "nota_2024_01.pdf"), então o ".*"
 // guloso no início garante que os dois últimos grupos numéricos — os que
 // realmente importam — sejam capturados, não os primeiros que aparecerem.
-var extractedImageNamePattern = regexp.MustCompile(`^.*_(\d+)_Im(\d+)\.[A-Za-z0-9]+$`)
+//
+// O prefixo do último segmento NÃO é sempre "Im": o pdfcpu deriva esse nome
+// do nome do recurso XObject da página (ver WriteImageToDisk em
+// pdfcpu/pkg/api/extract.go, campo img.Name), então varia conforme como o
+// PDF nomeia a imagem — "Im0", "X0", "Fm2", etc. Travar em "Im" fazia
+// páginas inteiras serem descartadas do OCR em silêncio sempre que o pdfcpu
+// usasse outro prefixo (ver AGENTS.md). Por isso o padrão aceita qualquer
+// sequência de letras no lugar de "Im".
+var extractedImageNamePattern = regexp.MustCompile(`^.*_(\d+)_[A-Za-z]+(\d+)\.[A-Za-z0-9]+$`)
 
 // ParseExtractedImageName extrai o número da página e o índice da imagem de
 // um nome gerado pelo pdfcpu (api.ExtractImagesFile). ok=false se o nome não
-// casar com o padrão "<base>_<pagina>_Im<indice>.<ext>".
+// casar com o padrão "<base>_<pagina>_<prefixo><indice>.<ext>".
 func ParseExtractedImageName(filename string) (page, index int, ok bool) {
 	m := extractedImageNamePattern.FindStringSubmatch(filename)
 	if m == nil {
@@ -184,9 +203,17 @@ type extractedImage struct {
 // ExtractPageTextsOpts extrai o texto de cada página do PDF em path,
 // aplicando OCR conforme opts. O índice 0 do slice retornado corresponde à
 // página 1 do documento.
-func ExtractPageTextsOpts(ctx context.Context, path string, opts TextOptions) ([]string, error) {
+//
+// O segundo valor devolvido lista avisos não-fatais ocorridos durante a
+// extração — hoje, só imagens extraídas para OCR cujo nome não pôde ser
+// associado a uma página (ver ParseExtractedImageName). A extração em si não
+// falha por causa deles: o texto das demais páginas continua sendo
+// devolvido normalmente, mas quem chama precisa repassar os avisos adiante
+// (ver OrganizeResult.Warnings / SplitResult.Warnings) para que o usuário
+// saiba que alguma página pode ter ficado sem OCR.
+func ExtractPageTextsOpts(ctx context.Context, path string, opts TextOptions) ([]string, []string, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	info, statErr := os.Stat(path)
@@ -201,33 +228,35 @@ func ExtractPageTextsOpts(ctx context.Context, path string, opts TextOptions) ([
 			lang:    opts.Lang,
 		}
 		if cached, ok := cacheGet(cacheKey); ok {
-			return cached, nil
+			return cached.texts, cached.warnings, nil
 		}
 	}
 
 	texts, err := extractEmbeddedPageTexts(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	result, err := applyOCRFallback(ctx, path, texts, opts)
+	result, warnings, err := applyOCRFallback(ctx, path, texts, opts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if cacheable {
-		cacheSet(cacheKey, result)
+		cacheSet(cacheKey, textCacheEntry{texts: result, warnings: warnings})
 	}
 
-	return result, nil
+	return result, warnings, nil
 }
 
 // applyOCRFallback decide, a partir de opts e do texto embutido já extraído,
 // se e quais páginas precisam de OCR, roda o motor sobre as imagens
-// extraídas dessas páginas, e devolve o texto final por página.
-func applyOCRFallback(ctx context.Context, path string, embedded []string, opts TextOptions) ([]string, error) {
+// extraídas dessas páginas, e devolve o texto final por página, junto dos
+// avisos não-fatais ocorridos durante a extração de imagens (ver
+// ExtractPageTextsOpts).
+func applyOCRFallback(ctx context.Context, path string, embedded []string, opts TextOptions) ([]string, []string, error) {
 	if opts.Mode == OCRNever || opts.Engine == nil || !opts.Engine.Available() {
-		return embedded, nil
+		return embedded, nil, nil
 	}
 
 	pagesNeedingOCR := make([]int, 0) // 1-based
@@ -245,7 +274,7 @@ func applyOCRFallback(ctx context.Context, path string, embedded []string, opts 
 	}
 
 	if len(pagesNeedingOCR) == 0 {
-		return embedded, nil
+		return embedded, nil, nil
 	}
 
 	needsOCR := make(map[int]bool, len(pagesNeedingOCR))
@@ -255,33 +284,65 @@ func applyOCRFallback(ctx context.Context, path string, embedded []string, opts 
 
 	outDir, err := os.MkdirTemp("", "pdfutil-ocr-*")
 	if err != nil {
-		return nil, fmt.Errorf("criar diretório temporário para OCR: %w", err)
+		return nil, nil, fmt.Errorf("criar diretório temporário para OCR: %w", err)
 	}
 	defer os.RemoveAll(outDir)
 
 	if err := api.ExtractImagesFile(path, outDir, nil, nil); err != nil {
-		return nil, fmt.Errorf("extrair imagens de %q para OCR: %w", path, err)
+		return nil, nil, fmt.Errorf("extrair imagens de %q para OCR: %w", path, err)
 	}
 
 	entries, err := os.ReadDir(outDir)
 	if err != nil {
-		return nil, fmt.Errorf("ler diretório de imagens extraídas %q: %w", outDir, err)
+		return nil, nil, fmt.Errorf("ler diretório de imagens extraídas %q: %w", outDir, err)
 	}
+
+	// warnings acumula avisos não-fatais desta extração. O caso central: o
+	// pdfcpu deriva o nome de cada imagem extraída do nome do recurso
+	// XObject da página, e esse nome nem sempre segue o prefixo "Im" (ver
+	// extractedImageNamePattern). Antes desta checagem, um arquivo cujo nome
+	// não casasse com o padrão era simplesmente pulado — a página
+	// correspondente ficava sem OCR e ninguém era avisado. É esse silêncio,
+	// não a expressão regular em si, que permitiu o defeito atravessar seis
+	// versões sem ser notado (ver AGENTS.md).
+	var warnings []string
+	imageFileCount := 0
+	matchedFileCount := 0
 
 	imagesByPage := make(map[int][]extractedImage)
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
+		imageFileCount++
 		name := entry.Name()
 		page, index, ok := ParseExtractedImageName(name)
-		if !ok || !needsOCR[page] {
+		if !ok {
+			warnings = append(warnings, fmt.Sprintf(
+				"imagem extraída %q não pôde ser associada a nenhuma página (nome fora do padrão esperado) e foi ignorada no OCR",
+				name,
+			))
+			continue
+		}
+		matchedFileCount++
+		if !needsOCR[page] {
 			continue
 		}
 		imagesByPage[page] = append(imagesByPage[page], extractedImage{
 			index: index,
 			path:  filepath.Join(outDir, name),
 		})
+	}
+
+	// Sinal forte de que o pdfcpu mudou de novo a convenção de nomes: imagens
+	// foram extraídas, mas NENHUMA pôde ser associada a uma página. Além dos
+	// avisos individuais acima (um por arquivo), isto merece um aviso à
+	// parte, explícito sobre a causa provável.
+	if imageFileCount > 0 && matchedFileCount == 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"nenhuma das %d imagem(ns) extraída(s) de %q pôde ser associada a uma página; o pdfcpu pode ter mudado a convenção de nomes dos arquivos extraídos e nenhuma página foi enviada ao OCR",
+			imageFileCount, path,
+		))
 	}
 
 	lang := opts.Lang
@@ -294,7 +355,7 @@ func applyOCRFallback(ctx context.Context, path string, embedded []string, opts 
 
 	for _, page := range pagesNeedingOCR {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		images := imagesByPage[page]
@@ -318,16 +379,17 @@ func applyOCRFallback(ctx context.Context, path string, embedded []string, opts 
 		}
 	}
 
-	return result, nil
+	return result, warnings, nil
 }
 
 // ExtractTextOpts devolve o texto do documento inteiro em path, com o texto
 // de cada página (após aplicado o fallback de OCR conforme opts)
-// concatenado por "\n".
-func ExtractTextOpts(ctx context.Context, path string, opts TextOptions) (string, error) {
-	pages, err := ExtractPageTextsOpts(ctx, path, opts)
+// concatenado por "\n", e os avisos não-fatais ocorridos durante a extração
+// (ver ExtractPageTextsOpts).
+func ExtractTextOpts(ctx context.Context, path string, opts TextOptions) (string, []string, error) {
+	pages, warnings, err := ExtractPageTextsOpts(ctx, path, opts)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return strings.Join(pages, "\n"), nil
+	return strings.Join(pages, "\n"), warnings, nil
 }

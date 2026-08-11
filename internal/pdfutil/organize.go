@@ -220,8 +220,11 @@ type OrganizeResult struct {
 	DryRun       bool
 	Total        int
 	// Warnings contém avisos que não impedem a operação (que já
-	// aconteceu) de ser considerada bem-sucedida — hoje, só a falha ao
-	// gravar o histórico via OrganizeOptions.Recorder.
+	// aconteceu) de ser considerada bem-sucedida: a falha ao gravar o
+	// histórico via OrganizeOptions.Recorder, e avisos de extração de texto
+	// (ex: imagem extraída para OCR cujo nome não pôde ser associada a uma
+	// página — ver ExtractTextOpts), prefixados com o nome do arquivo de
+	// origem para identificar qual PDF do lote gerou o aviso.
 	Warnings []string
 }
 
@@ -377,7 +380,10 @@ func Organize(ctx context.Context, opts OrganizeOptions) (OrganizeResult, error)
 		var unmatched *Unmatched
 		var dest string
 
-		text, textErr := ExtractTextOpts(ctx, srcPath, opts.Text)
+		text, textWarnings, textErr := ExtractTextOpts(ctx, srcPath, opts.Text)
+		for _, w := range textWarnings {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %s", name, w))
+		}
 		if textErr != nil {
 			unmatched = &Unmatched{Level: "texto", Pattern: "falha ao extrair texto"}
 		} else if opts.CSV != nil {
