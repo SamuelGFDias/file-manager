@@ -106,7 +106,7 @@ func (s *screen) Run(nav *ui.Navigator) error {
 	// undo.NewScreen() reportam o erro de verdade se o usuário de fato
 	// tentar entrar nela por outro caminho; a checagem aqui é só para
 	// decidir se a opção aparece.
-	if manifests, err := history.List(); err == nil && len(manifests) > 0 {
+	if headers, _, err := history.List(); err == nil && len(headers) > 0 {
 		options = append(options, optionUndo)
 	}
 	options = append(options, optionDocs, optionExit)
@@ -135,7 +135,15 @@ func (s *screen) Run(nav *ui.Navigator) error {
 		notice, ok = s.updateChecker.Notice()
 	}
 	if ok {
-		ui.Warnf("%s", notice)
+		// Correção de defeito e mudança incompatível recebem o mesmo
+		// destaque visual (ui.Warnf); novidade pura (SeverityMinor) não
+		// precisa da mesma urgência — ui.Infof basta.
+		switch s.updateChecker.Severity() {
+		case selfupdate.SeverityPatch, selfupdate.SeverityMajor:
+			ui.Warnf("%s", notice)
+		default:
+			ui.Infof("%s", notice)
+		}
 	}
 
 	choice := ""

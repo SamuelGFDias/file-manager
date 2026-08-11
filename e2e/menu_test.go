@@ -64,6 +64,16 @@ func TestMenuMostraDescricaoApenasDaOpcaoSelecionada(t *testing.T) {
 // binário com uma versão propositalmente antiga (v0.0.1) e confirma que o
 // aviso aparece já na primeira renderização do menu.
 //
+// Também cobre, de ponta a ponta, a distinção entre correção e novidade: o
+// texto esperado é montado com selfupdate.NoticeText a partir da
+// classificação real (selfupdate.ClassifyUpdate) dos releases publicados —
+// não um texto fixo — porque qual severidade sai depende do que estiver
+// publicado no repositório no momento em que o teste roda. Na prática, com
+// v0.0.1 como versão de partida, todo release publicado até hoje é mais
+// novo, e o histórico do repositório já teve pelo menos uma correção (ex:
+// v0.8.1), então o caso mais comum é SeverityPatch — mas o teste não
+// assume isso, calcula.
+//
 // Depende da API real do GitHub (o mesmo endpoint que o binário publicado
 // consulta) — não há como simular isso sem alterar código de produção
 // (apiBaseURL só é substituível de dentro do próprio pacote selfupdate, em
@@ -75,7 +85,7 @@ func TestMenuAvisaVersaoNova(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	release, err := selfupdate.LatestRelease(ctx, selfupdate.DefaultRepo)
+	releases, err := selfupdate.Releases(ctx, selfupdate.DefaultRepo)
 	if err != nil {
 		t.Skipf(
 			"sem acesso à API do GitHub (%s) neste ambiente (%v); pulando teste que depende de uma checagem "+
@@ -85,13 +95,25 @@ func TestMenuAvisaVersaoNova(t *testing.T) {
 	}
 
 	const oldVersion = "v0.0.1"
-	if cmp, cmpErr := selfupdate.CompareVersions(oldVersion, release.TagName); cmpErr != nil || cmp >= 0 {
+	latest, sev, ok, classifyErr := selfupdate.ClassifyUpdate(oldVersion, releases)
+	if classifyErr != nil || !ok {
 		t.Skipf(
-			"a última versão publicada de %s é %q, que não é mais nova que %s; não há como forçar o aviso "+
-				"de atualização neste repositório sem alterar código de produção",
-			selfupdate.DefaultRepo, release.TagName, oldVersion,
+			"não há release publicado em %s mais novo que %s (ou erro ao classificar: %v); não há como "+
+				"forçar o aviso de atualização neste repositório sem alterar código de produção",
+			selfupdate.DefaultRepo, oldVersion, classifyErr,
 		)
 	}
+	// Só o prefixo até a seta (ex: "correção importante disponível: v0.0.1")
+	// é verificado, não a mensagem inteira: o texto completo é longo o
+	// bastante para quebrar linha no terminal capturado, o que tornaria uma
+	// comparação exata frágil sem testar nada a mais de relevante — o que
+	// importa aqui é que o prefixo certo (que muda por severidade) apareça.
+	wantNotice := selfupdate.NoticeText(oldVersion, latest, sev)
+	arrowIdx := strings.Index(wantNotice, " → ")
+	if arrowIdx < 0 {
+		t.Fatalf("NoticeText(%q, %+v, %v) = %q, esperava conter \" → \"", oldVersion, latest, sev, wantNotice)
+	}
+	wantPrefix := wantNotice[:arrowIdx]
 
 	oldBin := filepath.Join(t.TempDir(), "file-manager-v0.0.1")
 	if err := buildBinary(oldBin, "-X main.version="+oldVersion); err != nil {
@@ -110,8 +132,7 @@ func TestMenuAvisaVersaoNova(t *testing.T) {
 	// suficiente para cobrir isso mais a latência real de rede e o tempo de
 	// start do processo, sem mascarar uma regressão que faça o aviso levar
 	// muito mais tempo que isso para aparecer.
-	sess.Expect("nova versão disponível: "+oldVersion, 8*time.Second)
-	sess.Expect("update", 200*time.Millisecond)
+	sess.Expect(wantPrefix, 8*time.Second)
 }
 
 // TestMenuSaiComOpcaoSair navega até "Sair" e confirma que o processo

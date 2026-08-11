@@ -266,11 +266,29 @@ Sem `--id` nem `--last`, em terminal interativo o comando pergunta qual operaç�
 | `--dry-run` | Só mostra o que seria feito, sem tocar em nada |
 | `-y, --yes` | Desfaz sem pedir confirmação |
 | `--list` | Lista as operações registradas e sai |
+| `--all` | Com `--list`, mostra todas as operações, sem o limite padrão de 20 |
 | `--force` | Permite desfazer uma operação que já foi desfeita antes |
+| `--prune` | Remove do disco os manifestos de histórico expirados e sai |
+| `--older-than <dias>` | Com `--prune`, usa N dias como limiar em vez do padrão |
+
+### Onde fica o histórico e por quanto tempo é mantido
+
+Cada operação real vira um arquivo em `<diretório de configuração>/file-manager/history/<id>.yaml` (`~/.config/file-manager/history` no Linux/macOS, `%AppData%\file-manager\history` no Windows). `undo --list` mostra, por padrão, só as **20 operações mais recentes** — com histórico grande, um rodapé (`mostrando 20 de 137 — use --all para ver todos`) avisa quantas ficaram de fora; `--all` remove o limite. A tela interativa de desfazer, no menu principal, segue o mesmo limite, com uma opção final "Ver operações mais antigas" que amplia para a lista completa.
+
+O histórico não cresce para sempre: a cada operação real (`organize-pdf`), uma poda automática remove manifestos expirados, com dois prazos diferentes:
+
+- **Operação já desfeita:** removida **30 dias** depois de ter sido desfeita — já cumpriu sua função, o único motivo de mantê-la por um tempo é permitir conferir o histórico recente.
+- **Operação pendente (nunca desfeita):** removida **180 dias** depois de ter sido registrada — desfazer algo de 6 meses atrás deixou de ser realista (o destino provavelmente já mudou por fora do `file-manager`, e a verificação de tamanho faria o `undo` pular a maioria dos arquivos de qualquer forma). Uma operação pendente **mais nova** que isso nunca é removida automaticamente, não importa a idade — é exatamente ela que permite desfazer mais tarde.
+
+Quando a poda automática remove um manifesto **pendente** (não um já desfeito), `organize-pdf` avisa na hora, junto do resumo da execução — algo como `2 registros de histórico com mais de 180 dias foram removidos e não podem mais ser desfeitos`. Apagar em silêncio a capacidade de desfazer seria exatamente o tipo de surpresa que este projeto evita.
+
+Para podar manualmente, sem esperar a próxima operação: `file-manager undo --prune` (pede confirmação, a menos que `-y`). `--older-than <dias>` substitui os dois prazos padrão por um único limiar escolhido na hora — por exemplo, `file-manager undo --prune --older-than 90 -y` remove tudo (desfeito ou pendente) com mais de 90 dias.
+
+Um manifesto individual corrompido (arquivo truncado por disco cheio, processo interrompido no momento errado) nunca derruba a listagem nem o `undo` das demais operações: `undo --list` e a tela interativa mostram um aviso citando o arquivo problemático e seguem normalmente com o resto do histórico.
 
 ## Atualização
 
-`file-manager update` consulta o último release publicado no GitHub, compara com a versão em execução e, se houver uma mais nova, pede confirmação antes de baixar e substituir o próprio executável.
+`file-manager update` consulta os releases publicados no GitHub, compara com a versão em execução e, se houver algo mais novo, pede confirmação antes de baixar e substituir o próprio executável.
 
 | Flag | Descrição |
 |------|-----------|
@@ -286,6 +304,18 @@ file-manager update --check   # só verifica
 Se já estiver na última versão, o comando informa e sai sem erro. Antes de substituir o executável atual, o binário baixado é executado para validação — um download corrompido aborta a atualização sem tocar no executável em uso.
 
 Além disso, o menu principal verifica em segundo plano (uma vez por sessão) se há uma versão mais nova. Na primeira abertura, o menu aguarda um instante (no máximo 1,5s) pelo resultado dessa verificação e, se houver versão mais nova, exibe um aviso com a progressão de versão e o comando para atualizar. Sem internet, ou se a verificação não chegar a tempo, o menu abre normalmente e nenhum aviso aparece.
+
+### Três tipos de aviso
+
+Nem toda atualização pesa igual, e o aviso — tanto no menu quanto em `update`/`update --check` — distingue três situações:
+
+| Aviso | Quando aparece | O que significa para você |
+|-------|-----------------|----------------------------|
+| **Novidade** ("nova versão disponível") | Nenhum release entre a sua versão e a mais recente corrige um defeito. | Pode esperar — é só recurso novo. |
+| **Correção** ("correção importante disponível") | Existe pelo menos um release de correção (patch) no caminho entre a sua versão e a mais recente — mesmo que o salto pareça só novidade. | A versão que você está rodando tem um defeito conhecido já corrigido. Atualize para não continuar produzindo resultado possivelmente inconsistente. |
+| **Incompatibilidade** ("mudanças incompatíveis disponíveis") | Algum release no caminho aumenta o número major. | O formato de perfis ou a semântica de alguma flag mudou. Leia as notas do release (o aviso traz a URL) antes de atualizar, especialmente se você automatiza o `file-manager`. |
+
+O detalhe que importa: a classificação **não** compara só "sua versão" contra "a mais recente". Ela pergunta se existe alguma correção no caminho inteiro entre as duas. Por exemplo, se você está na `0.8.0` e a mais recente é a `0.9.0`, o salto por si só parece só novidade — mas se a `0.8.1` (uma correção) foi publicada no meio, ela já está incluída na `0.9.0` (releases são cumulativos), e você está, agora, rodando o defeito que ela corrigiu. Por isso o aviso mostra **correção**, não novidade, nesse caso.
 
 ## Perfis
 

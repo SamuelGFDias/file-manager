@@ -424,37 +424,55 @@ func newUpdateCommand(v Version) *cobra.Command {
 				ctx = context.Background()
 			}
 
-			ui.Infof("Consultando o último release publicado em %s...", selfupdate.DefaultRepo)
+			ui.Infof("Consultando os releases publicados em %s...", selfupdate.DefaultRepo)
 
-			release, err := selfupdate.LatestRelease(ctx, selfupdate.DefaultRepo)
+			releases, err := selfupdate.Releases(ctx, selfupdate.DefaultRepo)
 			if err != nil {
 				return fmt.Errorf(
-					"erro ao consultar a última versão publicada; verifique sua conexão com a "+
+					"erro ao consultar as versões publicadas; verifique sua conexão com a "+
 						"internet e tente novamente: %w", err,
 				)
 			}
+			if len(releases) == 0 {
+				return fmt.Errorf("o repositório %q não tem nenhum release publicado", selfupdate.DefaultRepo)
+			}
 
 			current := v.Version
+			// target é o release a baixar se o usuário confirmar: o mais
+			// recente publicado. Só muda de valor abaixo quando current é
+			// semver válido e ClassifyUpdate acha algo mais novo — para
+			// build local (current não-semver) permanece o mais recente
+			// da lista, que já vem ordenada da mais nova para a mais
+			// antiga.
+			target := releases[0]
+			sev := selfupdate.SeverityNone
 
 			if _, verErr := selfupdate.ParseVersion(current); verErr != nil {
 				ui.Warnf(
 					"esta é uma compilação local (versão %q), não uma versão publicada oficialmente",
 					current,
 				)
-				ui.Infof("última versão publicada: %s (%s)", release.TagName, release.HTMLURL)
+				ui.Infof("última versão publicada: %s (%s)", target.TagName, target.HTMLURL)
 			} else {
-				cmp, cmpErr := selfupdate.CompareVersions(current, release.TagName)
-				if cmpErr != nil {
-					return fmt.Errorf("erro ao comparar versões: %w", cmpErr)
+				latest, classifiedSev, ok, classifyErr := selfupdate.ClassifyUpdate(current, releases)
+				if classifyErr != nil {
+					return fmt.Errorf("erro ao comparar versões: %w", classifyErr)
 				}
 
-				if cmp >= 0 {
+				if !ok {
 					ui.Successf("você já está na versão mais recente (%s)", current)
 					return nil
 				}
 
-				ui.Infof("nova versão disponível: %s → %s", current, release.TagName)
-				ui.Infof("detalhes: %s", release.HTMLURL)
+				target = latest
+				sev = classifiedSev
+
+				notice := selfupdate.NoticeText(current, latest, sev)
+				if sev == selfupdate.SeverityPatch || sev == selfupdate.SeverityMajor {
+					ui.Warnf("%s", notice)
+				} else {
+					ui.Infof("%s", notice)
+				}
 			}
 
 			if checkOnly {
@@ -462,9 +480,24 @@ func newUpdateCommand(v Version) *cobra.Command {
 			}
 
 			if !yes {
+				confirmMessage := fmt.Sprintf("Atualizar para %s agora?", target.TagName)
+				switch sev {
+				case selfupdate.SeverityPatch:
+					confirmMessage = fmt.Sprintf(
+						"Atualizar para %s agora? Esta versão corrige um defeito da que você está usando.",
+						target.TagName,
+					)
+				case selfupdate.SeverityMajor:
+					confirmMessage = fmt.Sprintf(
+						"Atualizar para %s agora? Esta versão tem mudanças incompatíveis — "+
+							"leia as notas do release antes de confirmar.",
+						target.TagName,
+					)
+				}
+
 				confirmed := false
 				question := &survey.Confirm{
-					Message: fmt.Sprintf("Atualizar para %s agora?", release.TagName),
+					Message: confirmMessage,
 					Default: false,
 				}
 				if askErr := survey.AskOne(question, &confirmed); askErr != nil {
@@ -481,7 +514,7 @@ func newUpdateCommand(v Version) *cobra.Command {
 				return err
 			}
 
-			asset, err := selfupdate.FindAsset(release, assetName)
+			asset, err := selfupdate.FindAsset(target, assetName)
 			if err != nil {
 				return err
 			}
@@ -508,7 +541,7 @@ func newUpdateCommand(v Version) *cobra.Command {
 				return err
 			}
 
-			ui.Successf("atualizado: %s → %s", current, release.TagName)
+			ui.Successf("atualizado: %s → %s", current, target.TagName)
 			ui.Infof("a nova versão vale a partir da próxima execução do file-manager")
 
 			return nil

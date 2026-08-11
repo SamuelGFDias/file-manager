@@ -21,6 +21,14 @@ import (
 
 const optionBack = "Voltar"
 
+// optionShowOlder reapresenta o seletor com o histórico completo, sem o
+// limite de history.ListDisplayLimit — ver comentário de selectManifestID.
+// Mesmo texto usado pelo equivalente em internal/app/undo.go (a linha de
+// comando "undo" sem --id/--last): as duas telas nunca podem divergir sobre
+// como lidar com um histórico grande, mesmo princípio já aplicado a
+// history.Undo em todo o resto deste par de arquivos.
+const optionShowOlder = "Ver operações mais antigas"
+
 // screen é a implementação de ui.Screen para a tela de desfazer.
 type screen struct{}
 
@@ -40,15 +48,21 @@ func (s *screen) Title() string {
 // tela sempre retorna ao chamador (nav.Pop()) — nenhum caminho deste método
 // devolve um erro não-nil.
 func (s *screen) Run(nav *ui.Navigator) error {
-	manifests, err := history.List()
+	headers, warnings, err := history.List()
 	if err != nil {
 		ui.Errorf("erro ao listar operações registradas: %v", err)
 		ui.Pause()
 		nav.Pop()
 		return nil
 	}
+	// Manifesto individual ilegível (ver history.List) não impede a tela
+	// de abrir com o que sobrou — só avisa, do mesmo jeito que "undo
+	// --list" na linha de comando.
+	for _, w := range warnings {
+		ui.Warnf("%s", w)
+	}
 
-	if len(manifests) == 0 {
+	if len(headers) == 0 {
 		// Não deveria acontecer na prática — mainmenu só empurra esta tela
 		// quando já sabe que há histórico — mas a tela precisa se
 		// comportar bem mesmo assim (ex: alguém apagou os manifestos à
@@ -59,20 +73,8 @@ func (s *screen) Run(nav *ui.Navigator) error {
 		return nil
 	}
 
-	options := make([]string, 0, len(manifests)+1)
-	byLabel := make(map[string]history.Manifest, len(manifests))
-	for _, m := range manifests {
-		label := formatManifestLabel(m)
-		options = append(options, label)
-		byLabel[label] = m
-	}
-	options = append(options, optionBack)
-
-	chosen := ""
-	if err := survey.AskOne(&survey.Select{
-		Message: "Qual operação deseja desfazer?",
-		Options: options,
-	}, &chosen); err != nil {
+	id, ok, err := selectManifestID(headers)
+	if err != nil {
 		if !isInterrupt(err) {
 			ui.Errorf("erro ao ler seleção: %v", err)
 			ui.Pause()
@@ -80,33 +82,88 @@ func (s *screen) Run(nav *ui.Navigator) error {
 		nav.Pop()
 		return nil
 	}
-
-	if chosen == optionBack {
+	if !ok {
 		nav.Pop()
 		return nil
 	}
 
-	runUndo(byLabel[chosen])
+	m, err := history.Load(id)
+	if err != nil {
+		ui.Errorf("erro ao carregar a operação selecionada: %v", err)
+		ui.Pause()
+		nav.Pop()
+		return nil
+	}
+
+	runUndo(m)
 	nav.Pop()
 	return nil
 }
 
+// selectManifestID monta o seletor com no máximo history.ListDisplayLimit
+// operações (headers já vem ordenado das mais recentes para as mais
+// antigas — ver history.List), mais "Voltar". Com histórico maior que o
+// limite, uma opção extra "Ver operações mais antigas" reapresenta o
+// seletor com a lista completa, sem limite algum — um survey.Select com
+// centenas de itens é inutilizável. ok é false quando o usuário escolheu
+// "Voltar"; err carrega qualquer erro de leitura do prompt (ex: Ctrl+C).
+func selectManifestID(headers []history.Header) (id string, ok bool, err error) {
+	shown := headers
+	truncated := len(headers) > history.ListDisplayLimit
+	if truncated {
+		shown = headers[:history.ListDisplayLimit]
+	}
+
+	for {
+		options := make([]string, 0, len(shown)+2)
+		byLabel := make(map[string]string, len(shown))
+		for _, h := range shown {
+			label := formatManifestLabel(h)
+			options = append(options, label)
+			byLabel[label] = h.ID
+		}
+		if truncated {
+			options = append(options, optionShowOlder)
+		}
+		options = append(options, optionBack)
+
+		chosen := ""
+		if askErr := survey.AskOne(&survey.Select{
+			Message: "Qual operação deseja desfazer?",
+			Options: options,
+		}, &chosen); askErr != nil {
+			return "", false, askErr
+		}
+
+		if chosen == optionBack {
+			return "", false, nil
+		}
+		if chosen == optionShowOlder {
+			shown = headers
+			truncated = false
+			continue
+		}
+
+		return byLabel[chosen], true, nil
+	}
+}
+
 // formatManifestLabel formata uma entrada do seletor: ID, data, ferramenta,
 // ação, pastas, quantidade de arquivos e status (pendente ou já desfeita).
-func formatManifestLabel(m history.Manifest) string {
+func formatManifestLabel(h history.Header) string {
 	status := "pendente"
-	if m.UndoneAt != nil {
-		status = "já desfeita em " + m.UndoneAt.Local().Format("02/01/2006 15:04:05")
+	if h.UndoneAt != nil {
+		status = "já desfeita em " + h.UndoneAt.Local().Format("02/01/2006 15:04:05")
 	}
 	return fmt.Sprintf(
 		"%s — %s — %s (%s) — %s → %s — %s — %s",
-		m.ID,
-		m.CreatedAt.Local().Format("02/01/2006 15:04:05"),
-		m.Tool,
-		m.Action,
-		m.InputDir,
-		m.OutputDir,
-		ui.Count(len(m.Entries), "arquivo", "arquivos"),
+		h.ID,
+		h.CreatedAt.Local().Format("02/01/2006 15:04:05"),
+		h.Tool,
+		h.Action,
+		h.InputDir,
+		h.OutputDir,
+		ui.Count(h.EntryCount, "arquivo", "arquivos"),
 		status,
 	)
 }
