@@ -1,4 +1,4 @@
-.PHONY: build build-linux build-windows build-all test lint fmt new-tool docs clean
+.PHONY: build build-linux build-windows build-all test e2e lint fmt new-tool docs clean
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -19,6 +19,16 @@ build-all: build-linux build-windows
 
 test:
 	go test ./... -race -cover
+
+# e2e roda os testes ponta a ponta que abrem o binário real dentro de um
+# terminal virtual (internal/testcli). Exigem Linux (/dev/ptmx) e são bem
+# mais lentos que a suíte normal (cada cenário inicia um processo e navega
+# por prompts reais) — por isso ficam sob a tag de build "e2e" e fora do
+# alvo "test" e do "go test ./..." do dia a dia. Compila o binário sob teste
+# uma única vez (dentro do próprio TestMain) e roda cada cenário contra ele.
+e2e:
+	@echo "Rodando testes e2e (terminal virtual, só Linux, mais lentos que 'make test')..."
+	go test -tags e2e ./e2e/... -v -count=1
 
 lint:
 	go vet ./...

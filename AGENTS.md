@@ -29,6 +29,8 @@ internal/ocr/                     Wrapper do executável externo tesseract (não
 internal/regexcalib/              Sugestão de regex a partir de valor de exemplo
 internal/selfupdate/              Auto-atualização: consulta release, compara versão, baixa e substitui o executável
 internal/tools/                   Uma subpasta por ferramenta (mergepdf/, splitpdf/, organizepdf/)
+internal/testcli/                 Harness de teste ponta a ponta: abre o binário real num pty (linux only)
+e2e/                               Cenários de teste ponta a ponta (tag "e2e"; rodam via "make e2e")
 ```
 
 ## Decisões de Arquitetura
@@ -406,6 +408,7 @@ Todos via `make`:
 | `make build-windows` | Compilar para Windows amd64 |
 | `make build-all` | Compilar para Linux e Windows |
 | `make test` | Rodar testes com coverage e race detector |
+| `make e2e` | Rodar os testes ponta a ponta (terminal virtual, só Linux, mais lentos) — ver seção própria abaixo |
 | `make lint` | Executar `go vet` e `golangci-lint` (se instalado) |
 | `make fmt` | Formatar código com gofmt |
 | `make new-tool NAME=x` | Gerar esqueleto de ferramenta nova |
@@ -415,6 +418,31 @@ Todos via `make`:
 **Build com flags:** O Makefile injeta versão, commit e data via `-ldflags` (variáveis `main.version`, `main.commit`, `main.date`).
 
 **CGO:** Todas as compilações usam `CGO_ENABLED=0` (Go puro, sem C).
+
+## Testes Ponta a Ponta (E2E)
+
+**Por que existem:** o projeto tem 16 pacotes de teste verdes com `-race` e, ainda assim, três defeitos sérios chegaram ao usuário — todos escaparam pelo mesmo motivo: cada peça estava correta isoladamente, e o defeito vivia na costura entre elas ou na ordem em que o usuário percorre a interface. Nenhum teste que chama funções Go diretamente exercitava esses caminhos:
+
+1. O aviso de versão nova (Decisão 12) nunca aparecia na primeira abertura do menu — a checagem em segundo plano perdia a corrida contra o `survey.Select`, que assume o terminal antes do resultado chegar.
+2. O seletor de pasta de destino, em `organize-pdf`, reabria no diretório do executável em vez de continuar a partir da pasta de origem recém-selecionada (Decisão 11).
+3. Uma pasta de origem vazia só era percebida no fim de toda a calibração de regex, não no momento da seleção (Decisão 11).
+
+Os três já foram corrigidos no código de produção — mas nenhum unitário existente teria pego a regressão se algum deles voltasse. **`go test ./...` cobre lógica pura; não cobre navegação interativa.** Isso é uma lacuna estrutural da suíte, não um descuido pontual — qualquer defeito que dependa de redesenho de tela, ordem de prompts ou timing de goroutine só aparece abrindo o programa de verdade.
+
+**O que existe:**
+
+- `internal/testcli/testcli.go` (`//go:build linux`): harness que abre o binário real dentro de um pseudo-terminal (`/dev/ptmx`, via `golang.org/x/sys/unix` — já era dependência do módulo, nenhuma foi acrescentada), envia teclas como um usuário faria (`Send`, `Down`, `Up`, `Enter`, `CtrlC`) e verifica o que apareceu na tela (`Expect`, `ExpectAny`, `NotExpect`, `Screen`). Remove sequências ANSI antes de comparar texto.
+- `e2e/` (`//go:build e2e && linux`): os cenários em si. `TestMain` compila o binário uma única vez (a partir do código-fonte deste checkout, nunca um artefato publicado) e o reaproveita entre todos os testes do pacote.
+
+**Decisão central: nenhum arquivo de produção foi alterado para viabilizar isso.** Um gancho de teste embutido no programa (ex: uma flag `--test-mode` ou um hook de sincronização) acabaria testando o gancho, não o caminho real que o usuário percorre — e é justamente esse caminho que vem falhando. O harness exercita o binário exatamente como é publicado.
+
+**Como rodar:** `make e2e` (não está incluído em `make test`/`go test ./...` — são lentos, cada cenário inicia um processo e navega por prompts reais, e dependem de recursos específicos de Linux).
+
+**Isolamento de ambiente:** cada sessão de teste roda com `XDG_CONFIG_HOME` apontando para um `t.TempDir()` (nunca toca em `~/.config/file-manager` de verdade) e com `PATH` sobrescrito para excluir qualquer Tesseract instalado na máquina — `TESSERACT_PATH` inválido sozinho não bastaria, porque `internal/ocr.NewTesseract()` cai em `exec.LookPath("tesseract")` quando `TESSERACT_PATH` está vazio ou inválido; só com o `PATH` também controlado é que `ocr.Available()` fica determinístico entre máquinas diferentes.
+
+**Armadilha de sincronização a evitar em novos cenários:** `Expect` procura o texto em TODO o histórico acumulado da tela, não só no redesenho mais recente. Num fluxo que passa pelo mesmo prompt genérico mais de uma vez (ex: o seletor de pastas, chamado várias vezes em sequência em `organize-pdf`), usar um texto fixo que se repete a cada nível de navegação (ex: "PASTA DE ORIGEM") como alvo de `Expect` faz a chamada devolver na hora, lendo conteúdo antigo do buffer — sem esperar o redesenho de verdade. Na prática isso deixa uma tecla enviada em seguida correndo à frente da leitura do programa, podendo se perder. A correção é sempre esperar por um marcador que só existe, pela primeira vez, naquele passo específico — normalmente a linha `"Diretório atual: " + <caminho completo esperado>` — nunca um texto genérico que o prompt reimprime em todo redesenho. Cuidado também com colisão de prefixo: se um caminho A é prefixo de um caminho B já mostrado antes, esperar por A sozinho pode "casar" dentro do B antigo — prefira um marcador que não seja prefixo de nada que já apareceu.
+
+**PDFs de fixture:** o gerador binário mínimo (`internal/pdfutil/integration_test.go`, função `buildTestPDF`) não pôde ser reaproveitado — vive em um arquivo `_test.go` de outro pacote, e arquivos `_test.go` não são importáveis por pacotes externos. A lógica foi copiada (não promovida a símbolo exportado de produção) para `e2e/pdf_fixture_test.go`; qualquer ajuste na fixture original deve ser replicado manualmente aqui se for relevante para os testes ponta a ponta.
 
 ## Processo de Release
 
