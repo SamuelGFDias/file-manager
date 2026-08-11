@@ -40,6 +40,10 @@ func (v Version) String() string {
 // um por ferramenta registrada em Tools(), mais "docs" e "version". Quando
 // executado sem subcomando, abre o menu interativo (se houver terminal) ou
 // devolve um erro claro (se não houver).
+//
+// A flag "--version" (e o atalho "-v") também respondem, com a MESMA saída
+// do subcomando "version" — ver o bloco logo após a criação de root para o
+// raciocínio completo.
 func NewRootCommand(v Version) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "file-manager",
@@ -64,6 +68,40 @@ func NewRootCommand(v Version) *cobra.Command {
 			return nav.Loop(mainmenu.NewScreen(Tools(), v.String(), v.Version))
 		},
 	}
+
+	// root.Version não-vazio é o gatilho que o cobra usa (em
+	// Command.execute, chamado por root.Execute()) para tratar "--version"
+	// como um pedido de saída antecipada, antes de rodar RunE — exatamente
+	// o mesmo mecanismo que já intercepta "--help". Sem isso, "--version"
+	// seria só mais um argumento desconhecido.
+	root.Version = v.String()
+
+	// O template padrão do cobra (defaultVersionTemplate) imprime algo como
+	// "file-manager version v0.11.0 (...)" — diferente da saída do
+	// subcomando "version" (newVersionCommand, abaixo), que imprime só
+	// "v0.11.0 (...)". Ter duas saídas diferentes para a mesma informação é
+	// exatamente o tipo de divergência que este projeto evita (mesmo
+	// princípio do dry-run compartilhado e do "undo" único — ver AGENTS.md);
+	// um script feito em cima de uma das duas formas seria surpreendido pela
+	// outra. "{{.Version}}\n" imprime só o valor de root.Version (já
+	// formatado por Version.String() acima), byte a byte igual à saída de
+	// "file-manager version".
+	root.SetVersionTemplate("{{.Version}}\n")
+
+	// Registra a flag "--version" explicitamente, ANTES de qualquer
+	// execução: Command.InitDefaultVersionFlag (chamado automaticamente e
+	// de forma idempotente por root.Execute(), inclusive ao montar --help)
+	// só cria a SUA versão da flag quando c.Flags().Lookup("version") ==
+	// nil — registrar aqui de propósito faz o cobra pular a criação da dele
+	// (cujo texto de ajuda sai fixo em inglês, "version for file-manager",
+	// sem gancho de tradução) sem abrir mão de nada do comportamento
+	// embutido: a checagem de "--version" em Command.execute só olha o
+	// FLAG (por nome, "version"/bool), não quem o registrou. O atalho "-v"
+	// está livre neste CLI — nenhuma ferramenta nem subcomando o usa — e o
+	// próprio cobra só teria escolhido "v" de qualquer forma
+	// (ShorthandLookup("v") == nil); registrar aqui documenta essa escolha
+	// em vez de depender do fallback silencioso da biblioteca.
+	root.Flags().BoolP("version", "v", false, "mostra a versão do binário")
 
 	for _, t := range Tools() {
 		root.AddCommand(t.Command())
@@ -394,7 +432,11 @@ func newDocsCommand(v Version) *cobra.Command {
 	return docsCmd
 }
 
-// newVersionCommand monta o subcomando "version".
+// newVersionCommand monta o subcomando "version". Convive com a flag
+// global "--version"/"-v" (registrada em NewRootCommand) de propósito: quem
+// digita "--version" por reflexo (convenção quase universal) e quem prefere
+// o subcomando são atendidos igualmente, com a MESMA saída — nenhuma das
+// duas formas foi removida nem uma tratada como "a de verdade".
 func newVersionCommand(v Version) *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",

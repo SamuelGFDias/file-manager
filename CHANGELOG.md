@@ -18,6 +18,12 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [0.12.0] - 2026-08-11
+
+### Adicionado
+
+- **`file-manager --version` (e o atalho `-v`), além do subcomando `version` já existente.** `--version` é convenção praticamente universal em CLIs — quem digitava por reflexo recebia "flag desconhecida" e código de saída 1, a impressão de programa mal-acabado por uma lacuna de uma linha. As duas formas convivem: o subcomando não foi removido (quem já o usa, inclusive `internal/selfupdate.VerifyBinary`, continua funcionando sem mudança) e ambas imprimem **exatamente o mesmo texto**. O template padrão do cobra formataria `--version` de um jeito diferente do subcomando (`file-manager version v0.12.0 (...)` vs. `v0.12.0 (...)`) — ter duas saídas para a mesma informação quebraria qualquer script feito em cima de uma das duas. A descrição da flag em `--help` também sai em português (`mostra a versão do binário`), como o resto da ajuda.
+
 ## [0.11.0] - 2026-08-11
 
 ### Adicionado
