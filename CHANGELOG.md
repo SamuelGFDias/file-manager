@@ -22,6 +22,12 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.
 - [ ] Modo batch para processing em lote via arquivo JSON de configuração
 - [ ] Temas customizáveis para a interface interativa
 
+## [1.0.0]
+
+### Corrigido
+
+- **A documentação exportável para IA (`file-manager docs export --format context|skill`) não cobria `undo`, `profiles` (e seus subcomandos `list`/`export`/`import`/`path`), `update`, `version` nem o próprio `docs export`.** Causa: `docs.Render` percorria apenas `app.Tools()`, e nenhum desses comandos é uma "ferramenta" do registry — eles nunca tiveram como aparecer. O efeito era o oposto do propósito do recurso: quem instalasse o `SKILL.md` no seu agente de IA e pedisse para desfazer a última organização recebia "não existe" ou uma invenção, exatamente a alucinação que essa documentação existe para impedir. Agora `internal/commanddocs.CommandDocs()` documenta esses comandos com a mesma estrutura (`tool.Doc`) usada pelas ferramentas, `docs.Render`/`Export`/`NewScreen` passam a recebê-los como parâmetro, e os dois templates ganharam uma seção "Comandos auxiliares". Um teste novo (`TestRootCommandsAreAllDocumented`, em `internal/app/command_docs_test.go`) percorre os subcomandos reais de `NewRootCommand(...).Commands()` e falha se algum não estiver documentado nem como ferramenta nem como comando auxiliar — um comando novo, no futuro, quebra a suíte até ser documentado. Ver `AGENTS.md`, seção "Exportação de Documentação".
+
 ## [0.12.1] - 2026-08-11
 
 ### Corrigido

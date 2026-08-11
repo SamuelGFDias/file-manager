@@ -11,6 +11,7 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/AlecAivazis/survey/v2/terminal"
 
+	"github.com/SamuelGFDias/file-manager/internal/commanddocs"
 	"github.com/SamuelGFDias/file-manager/internal/history"
 	"github.com/SamuelGFDias/file-manager/internal/selfupdate"
 	"github.com/SamuelGFDias/file-manager/internal/tool"
@@ -168,7 +169,7 @@ func (s *screen) Run(nav *ui.Navigator) error {
 	case optionUndo:
 		nav.Push(undo.NewScreen())
 	case optionDocs:
-		nav.Push(docs.NewScreen(s.tools, s.version))
+		nav.Push(docs.NewScreen(s.tools, commanddocs.CommandDocs(), s.version))
 	case optionExit:
 		nav.Exit()
 	default:

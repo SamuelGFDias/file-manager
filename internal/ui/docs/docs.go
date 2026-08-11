@@ -53,6 +53,11 @@ func ParseFormat(s string) (Format, error) {
 type templateData struct {
 	Version string
 	Tools   []tool.Doc
+	// Commands é a documentação dos comandos auxiliares do CLI que não são
+	// ferramentas do registry (undo, profiles, update, version, docs
+	// export) — ver internal/commanddocs. Sem esta lista, docs.Render
+	// nunca teria como incluí-los: ela só percorre app.Tools().
+	Commands []tool.Doc
 }
 
 // templateName devolve o nome do arquivo de template embutido
@@ -72,9 +77,15 @@ func templateName(format Format) (string, error) {
 }
 
 // Render gera o Markdown do formato pedido a partir das Docs das
-// ferramentas informadas. É determinístico: a mesma entrada sempre produz
-// exatamente os mesmos bytes.
-func Render(format Format, tools []tool.Tool, version string) ([]byte, error) {
+// ferramentas e dos comandos auxiliares informados. É determinístico: a
+// mesma entrada sempre produz exatamente os mesmos bytes.
+//
+// commands é a documentação dos comandos do CLI que não são ferramentas do
+// registry (undo, profiles, update, version, docs export — ver
+// internal/commanddocs.CommandDocs()). Sem este parâmetro, a documentação
+// exportada só cobriria o que está em app.Tools(), que é exatamente a
+// lacuna que este parâmetro existe para fechar.
+func Render(format Format, tools []tool.Tool, commands []tool.Doc, version string) ([]byte, error) {
 	name, err := templateName(format)
 	if err != nil {
 		return nil, err
@@ -91,8 +102,9 @@ func Render(format Format, tools []tool.Tool, version string) ([]byte, error) {
 	}
 
 	data := templateData{
-		Version: version,
-		Tools:   docsList,
+		Version:  version,
+		Tools:    docsList,
+		Commands: commands,
 	}
 
 	var buf bytes.Buffer
@@ -105,8 +117,8 @@ func Render(format Format, tools []tool.Tool, version string) ([]byte, error) {
 
 // Export escreve o resultado de Render em path, criando os diretórios
 // necessários.
-func Export(format Format, path string, tools []tool.Tool, version string) error {
-	content, err := Render(format, tools, version)
+func Export(format Format, path string, tools []tool.Tool, commands []tool.Doc, version string) error {
+	content, err := Render(format, tools, commands, version)
 	if err != nil {
 		return err
 	}

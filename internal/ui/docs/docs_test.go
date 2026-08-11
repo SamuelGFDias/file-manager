@@ -82,6 +82,41 @@ func fakeTools() []tool.Tool {
 	return []tool.Tool{toolA, toolB}
 }
 
+// fakeCommands devolve uma lista mínima de tool.Doc representando comandos
+// auxiliares (não-ferramentas), no mesmo espírito de fakeTools acima —
+// usada para testar que Render/Export incluem .Commands sem depender de
+// internal/commanddocs (que importaria este pacote de volta, criando um
+// ciclo: internal/commanddocs não importa internal/ui/docs, mas testar com
+// dados falsos evita qualquer acoplamento entre os dois pacotes de teste).
+func fakeCommands() []tool.Doc {
+	return []tool.Doc{
+		{
+			ID:      "undo",
+			Title:   "Desfazer (undo)",
+			Summary: "Desfaz uma operação de organização registrada.",
+			Description: "Reverte uma operação registrada no histórico: apaga o que foi criado " +
+				"(cópia) ou devolve à origem (mover).",
+			WhenToUse: []string{"quando o usuário pedir para desfazer uma organização"},
+			Flags: []tool.FlagDoc{
+				{Name: "id", Type: "string", Description: "ID da operação a desfazer."},
+				{Name: "last", Type: "bool", Description: "Desfaz a operação mais recente."},
+			},
+			Examples: []tool.ExampleDoc{
+				{Title: "Desfazer a última operação", Command: "file-manager undo --last"},
+			},
+		},
+		{
+			ID:          "version",
+			Title:       "Versão (version)",
+			Summary:     "Mostra a versão do binário.",
+			Description: "Imprime a versão, commit e data de build.",
+			Examples: []tool.ExampleDoc{
+				{Title: "Mostrar a versão", Command: "file-manager version"},
+			},
+		},
+	}
+}
+
 func TestParseFormat(t *testing.T) {
 	tests := []struct {
 		in      string
@@ -114,8 +149,9 @@ func TestParseFormat(t *testing.T) {
 
 func TestRenderContext(t *testing.T) {
 	tools := fakeTools()
+	commands := fakeCommands()
 
-	out, err := Render(FormatContext, tools, "1.2.3")
+	out, err := Render(FormatContext, tools, commands, "1.2.3")
 	if err != nil {
 		t.Fatalf("Render(FormatContext) erro: %v", err)
 	}
@@ -143,10 +179,46 @@ func TestRenderContext(t *testing.T) {
 	}
 }
 
+// TestRenderContextIncludesCommands prova que Render(FormatContext) também
+// cobre os comandos auxiliares (undo, profiles, update, version, docs
+// export — ver internal/commanddocs), não só as ferramentas de app.Tools().
+// É o teste que teria pegado a lacuna original: antes desta mudança,
+// Render só recebia []tool.Tool e nunca tinha como imprimir nada além do
+// que vinha do registry.
+func TestRenderContextIncludesCommands(t *testing.T) {
+	commands := fakeCommands()
+
+	out, err := Render(FormatContext, fakeTools(), commands, "1.2.3")
+	if err != nil {
+		t.Fatalf("Render(FormatContext) erro: %v", err)
+	}
+	content := string(out)
+
+	if !strings.Contains(content, "Comandos auxiliares") {
+		t.Error("conteúdo não contém a seção \"Comandos auxiliares\"")
+	}
+
+	for _, d := range commands {
+		if !strings.Contains(content, d.Title) {
+			t.Errorf("conteúdo não contém o título do comando auxiliar %q", d.Title)
+		}
+		for _, f := range d.Flags {
+			if !strings.Contains(content, "--"+f.Name) {
+				t.Errorf("conteúdo não contém a flag %q do comando auxiliar %q", f.Name, d.ID)
+			}
+		}
+		for _, ex := range d.Examples {
+			if !strings.Contains(content, ex.Command) {
+				t.Errorf("conteúdo não contém o comando de exemplo %q do comando auxiliar %q", ex.Command, d.ID)
+			}
+		}
+	}
+}
+
 func TestRenderContext_EmptyProfileSchemaDoesNotLeakEmptyYamlBlock(t *testing.T) {
 	tools := fakeTools()
 
-	out, err := Render(FormatContext, tools, "1.2.3")
+	out, err := Render(FormatContext, tools, fakeCommands(), "1.2.3")
 	if err != nil {
 		t.Fatalf("Render(FormatContext) erro: %v", err)
 	}
@@ -168,7 +240,7 @@ func TestRenderContext_EmptyProfileSchemaDoesNotLeakEmptyYamlBlock(t *testing.T)
 func TestRenderSkill(t *testing.T) {
 	tools := fakeTools()
 
-	out, err := Render(FormatSkill, tools, "1.2.3")
+	out, err := Render(FormatSkill, tools, fakeCommands(), "1.2.3")
 	if err != nil {
 		t.Fatalf("Render(FormatSkill) erro: %v", err)
 	}
@@ -188,14 +260,45 @@ func TestRenderSkill(t *testing.T) {
 	}
 }
 
+// TestRenderSkillIncludesCommands prova que Render(FormatSkill) também
+// cobre os comandos auxiliares, com o mesmo raciocínio de
+// TestRenderContextIncludesCommands: sem isso, um SKILL.md instalado num
+// agente de IA nunca saberia que "undo", "profiles", "update", "version" e
+// "docs export" existem.
+func TestRenderSkillIncludesCommands(t *testing.T) {
+	commands := fakeCommands()
+
+	out, err := Render(FormatSkill, fakeTools(), commands, "1.2.3")
+	if err != nil {
+		t.Fatalf("Render(FormatSkill) erro: %v", err)
+	}
+	content := string(out)
+
+	if !strings.Contains(content, "Comandos auxiliares") {
+		t.Error("conteúdo não contém a seção \"Comandos auxiliares\"")
+	}
+
+	for _, d := range commands {
+		if !strings.Contains(content, d.Title) {
+			t.Errorf("conteúdo não contém o título do comando auxiliar %q", d.Title)
+		}
+		for _, ex := range d.Examples {
+			if !strings.Contains(content, ex.Command) {
+				t.Errorf("conteúdo não contém o comando de exemplo %q do comando auxiliar %q", ex.Command, d.ID)
+			}
+		}
+	}
+}
+
 func TestRenderIsDeterministic(t *testing.T) {
 	tools := fakeTools()
+	commands := fakeCommands()
 
-	out1, err := Render(FormatContext, tools, "1.2.3")
+	out1, err := Render(FormatContext, tools, commands, "1.2.3")
 	if err != nil {
 		t.Fatalf("Render erro: %v", err)
 	}
-	out2, err := Render(FormatContext, tools, "1.2.3")
+	out2, err := Render(FormatContext, tools, commands, "1.2.3")
 	if err != nil {
 		t.Fatalf("Render erro: %v", err)
 	}
@@ -204,11 +307,11 @@ func TestRenderIsDeterministic(t *testing.T) {
 		t.Error("Render(FormatContext) não é determinístico entre chamadas")
 	}
 
-	skill1, err := Render(FormatSkill, tools, "1.2.3")
+	skill1, err := Render(FormatSkill, tools, commands, "1.2.3")
 	if err != nil {
 		t.Fatalf("Render erro: %v", err)
 	}
-	skill2, err := Render(FormatSkill, tools, "1.2.3")
+	skill2, err := Render(FormatSkill, tools, commands, "1.2.3")
 	if err != nil {
 		t.Fatalf("Render erro: %v", err)
 	}
@@ -220,11 +323,12 @@ func TestRenderIsDeterministic(t *testing.T) {
 
 func TestExport(t *testing.T) {
 	tools := fakeTools()
+	commands := fakeCommands()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "subdir", "que", "nao", "existe", "docs.md")
 
-	if err := Export(FormatContext, path, tools, "1.2.3"); err != nil {
+	if err := Export(FormatContext, path, tools, commands, "1.2.3"); err != nil {
 		t.Fatalf("Export erro: %v", err)
 	}
 
@@ -233,7 +337,7 @@ func TestExport(t *testing.T) {
 		t.Fatalf("erro ao ler arquivo exportado: %v", err)
 	}
 
-	rendered, err := Render(FormatContext, tools, "1.2.3")
+	rendered, err := Render(FormatContext, tools, commands, "1.2.3")
 	if err != nil {
 		t.Fatalf("Render erro: %v", err)
 	}

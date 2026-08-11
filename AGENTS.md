@@ -23,6 +23,7 @@ internal/ui/profiles/             CRUD genérico de perfis YAML (reutilizado por
 internal/ui/undo/                 Tela interativa de desfazer uma organização
 internal/ui/mainmenu/             Menu principal
 internal/ui/docs/                 Exportação de documentação (context e skill)
+internal/commanddocs/             Doc dos comandos que NÃO são ferramentas do registry (undo, profiles, update, version, docs export)
 internal/tool/                    Contrato Tool/Param/Doc
 internal/config/                  Gerenciamento de perfis YAML (paths, validação, I/O)
 internal/history/                 Manifesto de operações reversíveis (organize-pdf) + lógica de desfazer (history.Undo)
@@ -253,7 +254,7 @@ O usuário final não acompanha o repositório, então o subcomando `file-manage
 
 **`Save()` devolve `(path string, prunedPending []string, err error)`** — o terceiro valor é novo na v0.9.0. A poda em si continua best-effort (erro silenciosamente ignorado — mesmo princípio da Decisão 15/relatório: uma tarefa de manutenção secundária não pode fazer uma gravação que já aconteceu parecer que falhou), mas `prunedPending` NÃO é descartado: apagar um manifesto pendente tira, de verdade, a capacidade de desfazer aquela operação, e isso precisa chegar ao usuário. `historyRecorder` (`internal/tools/organizepdf/command.go`) captura `prunedPending` via um `*[]string` fechado no closure — `pdfutil.OrganizeOptions.Recorder` só devolve `error`, então não há outro jeito de fazer essa informação sair do `Recorder` — e `runWith` acrescenta uma linha em `Result.Details` (`prunedPendingDetail`, ex: `"2 registros de histórico com mais de 180 dias foram removidos e não podem mais ser desfeitos"`) quando não está vazio. Um manifesto já desfeito removido pela mesma poda NÃO entra nessa lista nem gera aviso: já cumpriu sua função, não há capacidade nenhuma sendo tirada em silêncio.
 
-**`undo --prune`** (`internal/app/undo.go`, `runUndoPrune`) poda manualmente, na hora: calcula o plano com `history.PrunePlan`, mostra um resumo (quantos já desfeitos vs. quantos pendentes), pede confirmação — a menos que `-y` — e só então chama `history.Prune` de verdade. `--older-than <dias>` substitui os DOIS prazos padrão pelo mesmo número de dias para os dois; não há hoje um caso de uso que peça limiares diferentes numa poda manual pontual, então um único número mantém a flag simples. Este comando não está sujeito ao teste `TestToolsConsistency` (`internal/app/consistency_test.go`): `undo` não é uma "ferramenta" do registry (`app.Tools()`), então suas flags não precisam de `Doc().Flags` correspondente.
+**`undo --prune`** (`internal/app/undo.go`, `runUndoPrune`) poda manualmente, na hora: calcula o plano com `history.PrunePlan`, mostra um resumo (quantos já desfeitos vs. quantos pendentes), pede confirmação — a menos que `-y` — e só então chama `history.Prune` de verdade. `--older-than <dias>` substitui os DOIS prazos padrão pelo mesmo número de dias para os dois; não há hoje um caso de uso que peça limiares diferentes numa poda manual pontual, então um único número mantém a flag simples. `undo` não é uma "ferramenta" do registry (`app.Tools()`), então não é coberto pelo `TestToolsConsistency` de `internal/app/consistency_test.go` — mas isso não significa mais "sem `Doc().Flags` correspondente": desde a correção da lacuna de documentação para IA (ver seção "Exportação de Documentação", abaixo), `undo` tem uma `tool.Doc` própria em `internal/commanddocs`, coberta por um teste equivalente (`TestCommandDocsFlagsMatchCobra`, em `internal/app/command_docs_test.go`).
 
 ### 15. Relatório da Organização (`--report`, `internal/pdfutil/report.go`)
 
@@ -684,7 +685,44 @@ file-manager docs export --format skill --output SKILL.md
 - **Formato `context`:** Markdown detalhado com estrutura completa (útil para colar em chat de IA)
 - **Formato `skill`:** Markdown com frontmatter YAML compatível com agentes de IA (`.md` pode ser instalado como skill)
 
-Os metadados exportados (flags, exemplos, etc.) são gerados **automaticamente** a partir de `tool.Param`, reforçando a regra: uma única fonte de verdade.
+Os metadados das FERRAMENTAS exportados (flags, exemplos, etc.) são gerados **automaticamente** a partir de `tool.Param`, reforçando a regra: uma única fonte de verdade.
+
+### Comandos auxiliares (undo, profiles, update, version, docs export)
+
+`internal/ui/docs.Render`/`Export` percorriam só `app.Tools()` — e por isso NUNCA incluíam
+`undo`, `profiles` (e seus 4 subcomandos), `update`, `version` nem o próprio `docs export`,
+porque nenhum deles é uma "ferramenta" do registry (não tem tela interativa própria nem
+`Profile()`; existem só como comandos cobra montados diretamente em
+`internal/app/root.go`/`internal/app/undo.go`). O efeito era o oposto do propósito do
+recurso: quem instalava o `SKILL.md` e pedia para desfazer uma organização recebia
+"não existe" ou uma invenção da IA — exatamente a alucinação que essa documentação existe
+para impedir.
+
+A correção: `internal/commanddocs.CommandDocs() []tool.Doc` documenta cada um desses
+comandos com a mesma estrutura de `tool.Doc` usada pelas ferramentas (flags, exemplos,
+"quando usar", avisos). `docs.Render`/`Export`/`NewScreen` agora recebem essa lista como
+parâmetro extra, e os dois templates (`context.md.tmpl`, `skill.md.tmpl`) ganharam uma
+seção "Comandos auxiliares" que os imprime com o mesmo nível de detalhe das ferramentas
+(context) ou de forma concisa (skill).
+
+`CommandDocs()` vive em pacote próprio (`internal/commanddocs`), não em `internal/app`
+como seria mais natural: `internal/app` importa `internal/ui/mainmenu` (para abrir o menu
+interativo), e `internal/ui/mainmenu` precisa da mesma lista para repassá-la à tela
+`docs.NewScreen` — colocar `CommandDocs()` em `internal/app` criaria um ciclo de import
+(`app` → `mainmenu` → `app`). `internal/commanddocs` só importa `internal/tool`, então
+tanto `internal/app/root.go` quanto `internal/ui/mainmenu` podem importá-lo livremente.
+
+**A lacuna passou despercebida porque nada verificava que a documentação cobrisse TODOS os
+comandos** — `TestToolsConsistency` só olha `app.Tools()`. Agora `internal/app/command_docs_test.go`
+tem `TestRootCommandsAreAllDocumented`, que percorre os subcomandos REAIS de
+`NewRootCommand(...).Commands()` (recursivamente, entrando em comandos-grupo como
+`profiles` e `docs`) e falha se algum comando folha não estiver documentado nem como
+ferramenta nem em `CommandDocs()` — ignorando só `help` e `completion` (criados pelo
+próprio cobra, nunca documentados em lugar nenhum do projeto). Um comando novo adicionado
+a `NewRootCommand` no futuro **quebra este teste** até ganhar uma `tool.Doc` em
+`internal/commanddocs`. `TestCommandDocsFlagsMatchCobra`, no mesmo arquivo, faz para os
+comandos auxiliares o que `TestToolsConsistency` já fazia para as ferramentas: toda flag
+documentada precisa existir de fato no comando cobra, e vice-versa.
 
 ## Armadilhas Conhecidas
 
