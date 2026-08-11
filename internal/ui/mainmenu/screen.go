@@ -11,15 +11,18 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/AlecAivazis/survey/v2/terminal"
 
+	"github.com/SamuelGFDias/file-manager/internal/history"
 	"github.com/SamuelGFDias/file-manager/internal/selfupdate"
 	"github.com/SamuelGFDias/file-manager/internal/tool"
 	"github.com/SamuelGFDias/file-manager/internal/ui"
 	"github.com/SamuelGFDias/file-manager/internal/ui/docs"
 	"github.com/SamuelGFDias/file-manager/internal/ui/profiles"
+	"github.com/SamuelGFDias/file-manager/internal/ui/undo"
 )
 
 const (
 	optionProfiles = "Perfis"
+	optionUndo     = "Desfazer uma organização"
 	optionDocs     = "Documentação"
 	optionExit     = "Sair"
 )
@@ -95,6 +98,17 @@ func (s *screen) Run(nav *ui.Navigator) error {
 	if len(profiles.SupportingTools(s.tools)) > 0 {
 		options = append(options, optionProfiles)
 	}
+	// "Desfazer uma organização" só aparece quando já existe pelo menos um
+	// manifesto registrado — não faz sentido oferecer desfazer a quem
+	// nunca organizou nada, e a lista ficaria poluída de opção vazia.
+	// Erro ao listar é tratado como "sem histórico" aqui (silenciosamente,
+	// sem travar a abertura do menu): o próprio comando "undo" e a tela
+	// undo.NewScreen() reportam o erro de verdade se o usuário de fato
+	// tentar entrar nela por outro caminho; a checagem aqui é só para
+	// decidir se a opção aparece.
+	if manifests, err := history.List(); err == nil && len(manifests) > 0 {
+		options = append(options, optionUndo)
+	}
 	options = append(options, optionDocs, optionExit)
 
 	// Aviso de atualização, no rodapé do menu: impresso antes de abrir o
@@ -143,6 +157,8 @@ func (s *screen) Run(nav *ui.Navigator) error {
 	switch choice {
 	case optionProfiles:
 		nav.Push(profiles.NewScreen(s.tools))
+	case optionUndo:
+		nav.Push(undo.NewScreen())
 	case optionDocs:
 		nav.Push(docs.NewScreen(s.tools, s.version))
 	case optionExit:

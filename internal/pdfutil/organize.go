@@ -80,6 +80,19 @@ func ResolveDestination(text string, levels []Level, filenameRegex *regexp.Regex
 	return result, nil
 }
 
+// RecordedEntry descreve um único arquivo efetivamente copiado ou movido
+// por uma execução real (nunca uma simulação) de Organize, repassado a
+// OrganizeOptions.Recorder para quem quiser persistir um histórico
+// reversível (ver internal/history, que grava exatamente essas entradas).
+type RecordedEntry struct {
+	// Source é o caminho absoluto de origem do arquivo.
+	Source string
+	// Dest é o caminho absoluto de destino do arquivo.
+	Dest string
+	// Size é o tamanho do arquivo em Dest, lido logo após a operação.
+	Size int64
+}
+
 // OrganizeOptions descreve os parâmetros de uma operação de organização de
 // uma pasta de PDFs.
 type OrganizeOptions struct {
@@ -93,6 +106,22 @@ type OrganizeOptions struct {
 	Sample          int // 0 = todos; N>0 = só os N primeiros (ordem alfabética)
 	Overwrite       bool
 	Text            TextOptions // opções de extração de texto/OCR; zero-value = sem OCR
+	// Recorder, quando não-nil, é chamado ao final de uma execução REAL
+	// (nunca em DryRun) que tenha efetivamente copiado ou movido pelo
+	// menos um arquivo, com action = "copy" ou "move" (espelhando Copy) e
+	// entries = todos os arquivos efetivamente tocados, incluindo os que
+	// foram para UnclassifiedDir. É o ponto de injeção usado por quem
+	// chama Organize para gravar um histórico reversível, sem que este
+	// pacote precise conhecer internal/history nem internal/config —
+	// pdfutil permanece lógica pura de organização de arquivos, e quem
+	// monta o Recorder (o comando organize-pdf) decide onde e como
+	// persistir. Um erro devolvido por Recorder NUNCA falha Organize: a
+	// operação de organizar já aconteceu e não pode ser desfeita por uma
+	// falha em gravar o histórico dela; o erro vira um aviso em
+	// OrganizeResult.Warnings. nil (o zero-value) desliga a gravação por
+	// completo — é o comportamento de quem chama Organize diretamente,
+	// como os testes deste pacote.
+	Recorder func(action string, entries []RecordedEntry) error
 }
 
 // OrganizeEntry descreve o destino calculado (ou tentado) para um único
@@ -109,6 +138,10 @@ type OrganizeResult struct {
 	Unclassified []OrganizeEntry
 	DryRun       bool
 	Total        int
+	// Warnings contém avisos que não impedem a operação (que já
+	// aconteceu) de ser considerada bem-sucedida — hoje, só a falha ao
+	// gravar o histórico via OrganizeOptions.Recorder.
+	Warnings []string
 }
 
 // Summary devolve um resumo textual curto do resultado da organização.
@@ -198,6 +231,12 @@ func Organize(ctx context.Context, opts OrganizeOptions) (OrganizeResult, error)
 
 	result := OrganizeResult{DryRun: opts.DryRun, Total: len(files)}
 
+	// recorded acumula uma RecordedEntry por arquivo efetivamente
+	// copiado/movido (classificado ou não), na ordem em que a operação
+	// aconteceu. Permanece vazio em DryRun, já que o bloco que a alimenta
+	// só roda quando !opts.DryRun (ver abaixo).
+	var recorded []RecordedEntry
+
 	for _, name := range files {
 		if err := ctx.Err(); err != nil {
 			return OrganizeResult{}, err
@@ -258,6 +297,14 @@ func Organize(ctx context.Context, opts OrganizeOptions) (OrganizeResult, error)
 				if err := moveOrCopyFile(srcPath, destAbs, opts.Copy); err != nil {
 					return OrganizeResult{}, fmt.Errorf("organizar %q: %w", srcPath, err)
 				}
+
+				if opts.Recorder != nil {
+					recorded = append(recorded, RecordedEntry{
+						Source: absPathOrSelf(srcPath),
+						Dest:   absPathOrSelf(destAbs),
+						Size:   fileSizeOrZero(destAbs),
+					})
+				}
 			}
 		}
 
@@ -268,5 +315,50 @@ func Organize(ctx context.Context, opts OrganizeOptions) (OrganizeResult, error)
 		}
 	}
 
+	// A gravação do histórico só acontece depois que TODOS os arquivos já
+	// foram efetivamente organizados: recorded fica vazio em DryRun (o
+	// bloco acima nunca roda) e também quando nada foi de fato
+	// copiado/movido (ex: pasta de entrada vazia, ou toda colisão
+	// resolvida sem sobrescrever) — uma execução vazia não é histórico.
+	if opts.Recorder != nil && len(recorded) > 0 {
+		action := "copy"
+		if !opts.Copy {
+			action = "move"
+		}
+		if recErr := opts.Recorder(action, recorded); recErr != nil {
+			// Falha ao gravar o manifesto NUNCA falha Organize: a
+			// operação de organizar já aconteceu de verdade, e desfazer
+			// esse resultado (ou reportar erro sobre uma operação
+			// concluída) confundiria mais do que perder o histórico
+			// desta execução específica.
+			result.Warnings = append(result.Warnings, fmt.Sprintf(
+				"não foi possível gravar o histórico desta operação (desfazer ficará indisponível para ela): %v", recErr,
+			))
+		}
+	}
+
 	return result, nil
+}
+
+// absPathOrSelf devolve o caminho absoluto de p; se filepath.Abs falhar
+// (extremamente raro — só quando os.Getwd falha), devolve p sem alteração
+// em vez de propagar o erro, já que RecordedEntry não pode impedir a
+// operação de organizar (que já terminou) de ser reportada como concluída.
+func absPathOrSelf(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	return abs
+}
+
+// fileSizeOrZero devolve o tamanho de p, ou 0 se não for possível ler
+// (mesmo raciocínio de absPathOrSelf: nunca falha Organize por causa de um
+// detalhe do registro histórico).
+func fileSizeOrZero(p string) int64 {
+	info, err := os.Stat(p)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }

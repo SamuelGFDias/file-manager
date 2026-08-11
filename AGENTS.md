@@ -20,10 +20,12 @@ internal/ui/                       Screen, Navigator, Clear (abstração cross-p
 internal/ui/filepicker/           Seleção interativa de arquivos/pastas
 internal/ui/calibrate/            Calibração interativa de regex
 internal/ui/profiles/             CRUD genérico de perfis YAML (reutilizado por todas ferramentas)
+internal/ui/undo/                 Tela interativa de desfazer uma organização
 internal/ui/mainmenu/             Menu principal
 internal/ui/docs/                 Exportação de documentação (context e skill)
 internal/tool/                    Contrato Tool/Param/Doc
 internal/config/                  Gerenciamento de perfis YAML (paths, validação, I/O)
+internal/history/                 Manifesto de operações reversíveis (organize-pdf) + lógica de desfazer (history.Undo)
 internal/pdfutil/                 Núcleo: merge, split, organize, extração de texto (com fallback OCR)
 internal/ocr/                     Wrapper do executável externo tesseract (não é binding CGO)
 internal/regexcalib/              Sugestão de regex a partir de valor de exemplo
@@ -196,6 +198,26 @@ O usuário final não acompanha o repositório, então o subcomando `file-manage
 2. A dica em inglês `[Use arrows to move, type to filter]` foi traduzida para `[use ↑ ↓ para navegar, digite para filtrar, Enter para confirmar]`.
 
 **Importante para quem for mexer nesse template:** `selectQuestionTemplatePT` em `internal/ui/prompt.go` é uma **cópia adaptada** do template padrão da biblioteca (`survey.SelectQuestionTemplate`, survey v2.3.7, `select.go`), não uma implementação própria. Qualquer atualização da dependência `survey` que mude o template original pode exigir portar a mudança manualmente para essa cópia — não há vínculo automático entre os dois. Fora os dois ajustes acima, o template foi mantido idêntico ao original de propósito: o objetivo é uma mudança cirúrgica de apresentação, não uma reescrita do comportamento do prompt.
+
+### 14. Desfazer uma Organização (`internal/history`, comando `undo`)
+
+`organize-pdf` copia por padrão (não destrutivo), mas `--move` move de verdade — e quem roda um lote grande com uma regex recém-calibrada erra pelo menos uma vez. A partir da v0.5.0, toda execução real (nunca uma simulação) grava um manifesto reversível, e `file-manager undo` desfaz a partir dele. Só funciona para operações feitas a partir desta versão — não há manifesto de organizações anteriores.
+
+**Gravação injetada via `Recorder`, não acoplando `pdfutil` a `config`.** `internal/pdfutil.OrganizeOptions` ganhou um campo `Recorder func(action string, entries []RecordedEntry) error`. `internal/pdfutil.Organize` acumula uma `RecordedEntry` (caminhos absolutos de `Source`/`Dest`, mais `Size` do arquivo já no destino) por arquivo efetivamente copiado/movido — **incluindo os que foram para `--unclassified-dir`**, já que eles também precisam poder voltar — e, ao final de uma execução real com pelo menos uma entrada, chama `Recorder` uma única vez com todas elas. `Recorder` nil (o zero-value) desliga a gravação por completo: é o comportamento de quem chama `Organize` diretamente, inclusive os testes existentes de `internal/pdfutil`, que não precisaram mudar. `internal/tools/organizepdf/command.go` (`historyRecorder`) é o único ponto do CLI que conhece tanto `pdfutil` (o domínio de organização) quanto `internal/history` (o domínio de histórico) — nenhum dos dois pacotes de domínio importa o outro. **Decisão que não pode ser revertida silenciosamente:** se um refactor futuro tentar "simplificar" fazendo `pdfutil` chamar `history.Save` diretamente, isso reintroduz o acoplamento que esta injeção existe para evitar (e que o design original do projeto já evita entre `pdfutil` e `config`).
+
+**Falha ao gravar o manifesto nunca falha a organização.** A operação de organizar já aconteceu de verdade quando `Recorder` é chamado; se ele devolver erro (ex: disco cheio ao gravar o YAML), `Organize` não propaga esse erro — anexa uma linha em `OrganizeResult.Warnings`, que o comando `organize-pdf` repassa em `tool.Result.Details`. Falhar uma operação já concluída, ou fingir que ela não aconteceu, seria pior do que simplesmente perder o histórico daquela execução específica.
+
+**`internal/history`** não importa `internal/config` nem é importado por `internal/pdfutil`; repete o mesmo padrão de `config` (variável de pacote `userConfigDir`, substituível em teste) para resolver `<config>/file-manager/history`, em vez de importar `config` só para reaproveitar uma função de uma linha. A lógica de execução do desfazer (`history.Undo`, em `undo.go` do mesmo pacote) fica junto com a gravação do manifesto (`history.go`) — é regra de negócio pura, tão testável quanto o resto, e mantê-la no mesmo pacote evita um pacote extra que colidiria de nome com `internal/ui/undo` (a tela).
+
+**As regras de segurança de `history.Undo` são o núcleo da feature, cada uma testada explicitamente** (`internal/history/undo_test.go`):
+
+- **Nunca toca em um arquivo fora do manifesto.** `Undo` só olha para os caminhos em `Manifest.Entries` — nenhum outro arquivo da pasta de destino é sequer listado.
+- **Verificação de tamanho antes de apagar ou mover, não de conteúdo.** Antes de tocar em `Entry.Dest`, `Undo` compara `os.Stat(...).Size()` com `Entry.Size` (gravado no momento da organização original). Tamanho diferente → a entrada é pulada (`SkipSizeChanged`), nunca apagada: o arquivo pode ter sido substituído ou editado depois. A verificação é por tamanho e não por hash/conteúdo de propósito — comparar o conteúdo inteiro de cada arquivo custaria caro demais num lote com centenas de PDFs, e o ganho de precisão não compensa esse custo recorrente.
+- **Ação `copy`:** apaga `Entry.Dest`; `Entry.Source` nunca é lido nem tocado. **Ação `move`:** devolve `Entry.Dest` para `Entry.Source` via `os.Rename`, com fallback para copiar+remover (mesma estratégia de `moveOrCopyFile` em `pdfutil`, duplicada em `history` de propósito, para não acoplar os dois pacotes). Se `Entry.Source` já existir, a entrada é pulada (`SkipSourceExists`) — nunca sobrescreve.
+- **Remoção de diretórios vazios, nunca recursiva.** Depois de restaurar/apagar todos os arquivos elegíveis, `removeEmptyDirsUpward` sobe de cada `Entry.Dest` até (sem incluir) `Manifest.OutputDir`, removendo um diretório só quando `os.ReadDir` confirma que está vazio — um diretório com qualquer arquivo estranho dentro é preservado.
+- **Um manifesto já desfeito não pode ser desfeito de novo** sem `--force`: `Undo` devolve `ErrAlreadyUndone` (checável com `errors.Is`) quando `Manifest.UndoneAt != nil` e `force == false`, antes de tocar em qualquer arquivo. Quem chama `Undo` (comando `undo` e a tela `internal/ui/undo`) é responsável por chamar `history.MarkUndone(id, time.Now())` depois de uma execução real bem-sucedida — `Undo` em si não grava nada em disco além dos arquivos movidos/apagados.
+
+**Comando `undo` e tela interativa compartilham `history.Undo`, nunca podem divergir sobre o que "desfazer" significa** — mesmo princípio da Decisão 4 (dry-run compartilhado em `organize-pdf`). `internal/app/undo.go` resolve qual manifesto usar (`--id` > `--last` > `survey.Select` em terminal interativo > erro claro pedindo uma das flags fora de terminal interativo), monta o plano com `history.Undo(m, dryRun=true, force)` (usado tanto para a mensagem informativa quanto para a confirmação — "afetando N arquivos"), e só então executa de verdade. `internal/ui/mainmenu/screen.go` só mostra a opção "Desfazer uma organização" quando `history.List()` devolve pelo menos um manifesto — não polui o menu de quem nunca organizou nada; erro ao listar é tratado como "sem histórico" só para essa decisão de exibir ou não a opção (o próprio `undo.NewScreen()` reporta o erro de verdade se alcançado por outro caminho).
 
 ## Fluxo para Adicionar Uma Ferramenta Nova
 

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/SamuelGFDias/file-manager/internal/history"
 )
 
 func TestParseLevelFlagsBasic(t *testing.T) {
@@ -363,6 +365,97 @@ func TestCountPDFsNonexistentDirErrors(t *testing.T) {
 	_, err := countPDFs(filepath.Join(t.TempDir(), "nao-existe"))
 	if err == nil {
 		t.Fatal("countPDFs() com diretório inexistente deveria devolver erro")
+	}
+}
+
+// TestRunWritesHistoryManifestOnRealMove prova a ponta a ponta da injeção
+// de history.Recorder através de organizeOpts (ver historyRecorder em
+// command.go): uma execução real com --move grava um manifesto que pode
+// ser lido de volta via internal/history. t.Setenv isola XDG_CONFIG_HOME
+// num diretório temporário, exatamente como o harness e2e faz — nunca toca
+// no diretório de configuração real da máquina de quem roda os testes.
+//
+// O conteúdo do "PDF" de teste não precisa ser um PDF de verdade: mesmo
+// falhando a extração de texto, o arquivo cai em sem-classificacao, e essa
+// movimentação também deve ser registrada (ver contrato de
+// OrganizeOptions.Recorder e OrganizeResult).
+func TestRunWritesHistoryManifestOnRealMove(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(inputDir, "doc.pdf"), []byte("conteudo qualquer"), 0o644); err != nil {
+		t.Fatalf("criar pdf de teste: %v", err)
+	}
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:        inputDir,
+		OutputDir:       outputDir,
+		Move:            true,
+		UnclassifiedDir: "sem-classificacao",
+		OCR:             "never",
+	}
+
+	if _, err := tl.run(); err != nil {
+		t.Fatalf("run() erro inesperado: %v", err)
+	}
+
+	manifests, err := history.List()
+	if err != nil {
+		t.Fatalf("history.List() erro inesperado: %v", err)
+	}
+	if len(manifests) != 1 {
+		t.Fatalf("esperava 1 manifesto gravado, obteve %d", len(manifests))
+	}
+
+	m := manifests[0]
+	if m.Tool != "organize-pdf" {
+		t.Errorf("Tool = %q, esperava %q", m.Tool, "organize-pdf")
+	}
+	if m.Action != history.ActionMove {
+		t.Errorf("Action = %q, esperava %q", m.Action, history.ActionMove)
+	}
+	if len(m.Entries) != 1 {
+		t.Fatalf("esperava 1 entrada no manifesto, obteve %d: %+v", len(m.Entries), m.Entries)
+	}
+	if !filepath.IsAbs(m.InputDir) || !filepath.IsAbs(m.OutputDir) {
+		t.Errorf("InputDir/OutputDir do manifesto deveriam ser absolutos: %q / %q", m.InputDir, m.OutputDir)
+	}
+}
+
+// TestRunDryRunDoesNotWriteHistoryManifest é a garantia pedida
+// explicitamente: uma simulação não pode gerar histórico. Confirma que o
+// diretório de histórico continua vazio (ou nem chega a ser criado) depois
+// de um run() com DryRun: true.
+func TestRunDryRunDoesNotWriteHistoryManifest(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(inputDir, "doc.pdf"), []byte("conteudo qualquer"), 0o644); err != nil {
+		t.Fatalf("criar pdf de teste: %v", err)
+	}
+
+	tl := New()
+	tl.opts = Options{
+		InputDir:        inputDir,
+		OutputDir:       outputDir,
+		UnclassifiedDir: "sem-classificacao",
+		OCR:             "never",
+		DryRun:          true,
+	}
+
+	if _, err := tl.run(); err != nil {
+		t.Fatalf("run() erro inesperado: %v", err)
+	}
+
+	manifests, err := history.List()
+	if err != nil {
+		t.Fatalf("history.List() erro inesperado: %v", err)
+	}
+	if len(manifests) != 0 {
+		t.Fatalf("esperava 0 manifestos após DryRun, obteve %d: %+v", len(manifests), manifests)
 	}
 }
 

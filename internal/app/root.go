@@ -73,6 +73,7 @@ func NewRootCommand(v Version) *cobra.Command {
 	root.AddCommand(newVersionCommand(v))
 	root.AddCommand(newUpdateCommand(v))
 	root.AddCommand(newProfilesCommand())
+	root.AddCommand(newUndoCommand())
 
 	return root
 }
