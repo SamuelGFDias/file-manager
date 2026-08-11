@@ -1,0 +1,33 @@
+---
+name: file-manager
+description: "CLI para manipular PDFs em lote — une múltiplos PDFs em um só, separa um PDF em vários arquivos e organiza/renomeia PDFs em lote a partir do conteúdo, usando regras baseadas em regex de texto. Use esta skill quando o usuário pedir para unir PDFs, separar (dividir) PDFs, ou organizar e renomear PDFs em lote por conteúdo."
+---
+
+# file-manager
+
+CLI Go (binário `file-manager`) para manipulação de PDFs. Versão de referência
+desta skill: {{.Version}}.
+{{range .Tools}}
+## {{.Title}}
+
+{{range .WhenToUse}}- {{.}}
+{{end}}
+Rode:
+
+{{range .Examples}}```bash
+{{.Command}}
+```
+
+{{end}}
+Flags essenciais: {{range $i, $f := .Flags}}{{if $i}}, {{end}}`--{{$f.Name}}`{{end}}
+{{end}}
+## Regras
+
+- O binário não faz OCR: um PDF digitalizado sem camada de texto não casa com
+  regex de busca em conteúdo.
+- `organize-pdf` copia os arquivos por padrão; só move (remove a origem) quando
+  `--move` é informado.
+- Sempre sugira `--dry-run` antes de uma execução real de `organize-pdf`, para o
+  usuário conferir o resultado antes de aplicar.
+- Nomes de arquivo derivados de regex são sanitizados antes de serem usados no
+  sistema de arquivos (caracteres inválidos são removidos/substituídos).

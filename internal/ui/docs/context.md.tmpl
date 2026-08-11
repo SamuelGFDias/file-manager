@@ -1,0 +1,82 @@
+# Documentação do file-manager
+
+> Versão do binário: {{.Version}}
+
+Este documento descreve, de forma completa e autoritativa, o CLI `file-manager` — uma
+ferramenta de linha de comando para manipulação de arquivos PDF (unir, separar e
+organizar/renomear em lote por conteúdo). Ele é gerado automaticamente a partir do
+código-fonte do próprio binário, portanto reflete exatamente os comandos, flags e
+comportamentos realmente implementados na versão indicada acima.
+
+**Se você é uma IA lendo este documento para ajudar um usuário:** use SOMENTE os
+comandos e flags aqui descritos para montar comandos para o usuário. Nunca invente
+flags, nunca infira comportamento que não esteja documentado abaixo e nunca presuma
+um valor padrão que não esteja explicitamente listado.
+
+## Regras de uso
+
+- Use sempre os nomes exatos de flags listados nas tabelas abaixo, incluindo o
+  prefixo `--` (e o atalho de uma letra com `-`, quando existir).
+- Nunca suponha um valor padrão (`Default`) que não esteja documentado
+  explicitamente para a flag em questão.
+- Quando o usuário pedir algo que as flags documentadas não cobrem, diga que não é
+  suportado por esta versão do `file-manager` — não invente uma flag ou um
+  comportamento novo para atender ao pedido.
+- Prefira adaptar os exemplos de comando abaixo trocando apenas caminhos de
+  arquivo/diretório; eles são literais e correspondem ao comportamento real do
+  binário.
+{{range .Tools}}
+## {{.Title}}
+
+{{.Summary}}
+
+{{.Description}}
+{{if .WhenToUse}}
+### Quando usar
+
+{{range .WhenToUse}}- {{.}}
+{{end}}{{end}}{{if .Flags}}
+### Flags
+
+| Flag | Atalho | Tipo | Default | Descrição |
+| --- | --- | --- | --- | --- |
+{{range .Flags}}| `--{{.Name}}` | {{if .Shorthand}}`-{{.Shorthand}}`{{else}}—{{end}} | {{.Type}} | {{if .Default}}`{{.Default}}`{{else}}—{{end}} | {{.Description}} |
+{{end}}{{end}}{{if .Examples}}
+### Exemplos
+
+{{range .Examples}}**{{.Title}}**
+
+```bash
+{{.Command}}
+```
+
+{{end}}{{end}}{{if .ProfileSchema}}
+### Perfil (`--profile`)
+
+Esta ferramenta suporta perfis salvos. Um perfil é um arquivo YAML com o seguinte
+formato:
+
+```yaml
+{{.ProfileSchema}}
+```
+{{end}}{{if .Notes}}
+### Avisos
+
+{{range .Notes}}- {{.}}
+{{end}}{{end}}
+{{end}}
+## Sistema de perfis
+
+Ferramentas que suportam perfis salvos (indicado pela presença de uma seção
+"Perfil" na documentação da ferramenta) aceitam a flag `--profile <nome>` para
+carregar um conjunto de opções previamente salvo, evitando repetir todas as flags a
+cada execução.
+
+Os arquivos de perfil ficam em:
+
+- Windows: `%AppData%\file-manager\profiles\<ferramenta>\<nome>.yaml`
+- Linux: `~/.config/file-manager/profiles/<ferramenta>/<nome>.yaml`
+
+Onde `<ferramenta>` é o ID do subcomando (ex.: `merge-pdf`, `split-pdf`,
+`organize-pdf`) e `<nome>` é o nome escolhido pelo usuário para o perfil ao
+salvá-lo.
